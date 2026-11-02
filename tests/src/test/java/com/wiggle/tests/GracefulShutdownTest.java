@@ -8,6 +8,7 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -87,7 +88,7 @@ class GracefulShutdownTest {
 
         DrainH drainH = new DrainH(runsOfA, runsOfB, runsOfC, aStarted, proceed);
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             Worker worker = new Worker(client, "w-" + Ids.next("x")).registerHandler(drainH);

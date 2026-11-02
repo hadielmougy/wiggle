@@ -1,6 +1,7 @@
 package com.wiggle.server.cluster;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.ReplicatedStorage;
 import com.wiggle.server.store.ReplicatedStorage.Fallback;
 import com.wiggle.server.store.ReplicatedStorage.Named;
@@ -16,7 +17,7 @@ class ReplicaMonitorTest {
 
     @Test @DisplayName("once the leader stamps the heartbeat, the probe finds the replica within its lag")
     void aReplicaComesIntoService() throws Exception {
-        InMemoryStorage primary = new InMemoryStorage();
+        JdbcStorage primary = PostgresStorageFactory.inMemory();
         // a "replica" that is the primary itself: zero lag, so it serves as soon as a heartbeat exists
         ReplicatedStorage storage = new ReplicatedStorage(0, primary, List.of(new Named("#1", primary)),
                 2_000, Fallback.PRIMARY);

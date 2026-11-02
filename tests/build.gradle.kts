@@ -5,6 +5,7 @@ plugins {
 dependencies {
     implementation(project(":client"))
     implementation(project(":server"))
+    implementation(project(":postgres"))   // H2 in memory for Scenarios
     implementation(project(":test-fixtures"))
 
     testImplementation(project(":client"))

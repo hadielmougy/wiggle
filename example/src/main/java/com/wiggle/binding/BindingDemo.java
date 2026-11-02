@@ -4,6 +4,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
@@ -33,7 +34,7 @@ public final class BindingDemo {
                 Duration.ofMillis(200), Duration.ofSeconds(2), 3, Duration.ofSeconds(30),
                 Duration.ofSeconds(2), Duration.ofHours(1), 100, 0);
 
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             // (1) author: register the topology, once.

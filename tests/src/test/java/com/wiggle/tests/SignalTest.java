@@ -7,6 +7,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
@@ -93,7 +94,7 @@ class SignalTest {
                 .thenAwait("approval")
                 .thenApply(s::after));
 
-        try (WiggleServer server = new WiggleServer(config(0)).start();
+        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w").registerHandler(new ApproveH())) {
             client.register(bp);
@@ -120,7 +121,7 @@ class SignalTest {
         FlowSpec bp = FlowSpec.define("sig-wrong", 1, Map.class, AfterStep.class, (f, s) -> f
                 .thenAwait("expected")
                 .thenApply(s::after));
-        try (WiggleServer server = new WiggleServer(config(0)).start();
+        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w2").registerHandler(new WrongH())) {
             client.register(bp);
@@ -141,7 +142,7 @@ class SignalTest {
                 .thenAwait("approval", Duration.ofMillis(250), b -> b.thenApply(s::escalate))
                 .thenApply(s::after));
 
-        try (WiggleServer server = new WiggleServer(config(0)).start();
+        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w3").registerHandler(new EscalateH())) {
             client.register(bp);
@@ -162,7 +163,7 @@ class SignalTest {
                 .thenAwait("approval", Duration.ofMillis(250))
                 .thenApply(s::after));
 
-        try (WiggleServer server = new WiggleServer(config(0)).start();
+        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w4").registerHandler(new TimeoutH())) {
             client.register(bp);

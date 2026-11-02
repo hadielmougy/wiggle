@@ -4,15 +4,14 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
+import com.wiggle.tests.WatchedRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -74,7 +73,7 @@ class LocalBatchBench {
     private static Tally run(int steps) {
         Map<String, Long> counts = new ConcurrentHashMap<>();
         AtomicLong total = new AtomicLong();
-        try (Storage raw = new InMemoryStorage()) {
+        try (Storage raw = PostgresStorageFactory.inMemory()) {
             raw.migrate();
             Storage counting = new Counting(raw, counts, total);
             DefinitionRegistry registry = new DefinitionRegistry(counting);
@@ -96,32 +95,28 @@ class LocalBatchBench {
         return new Tally(steps, Map.copyOf(counts), total.get());
     }
 
-    /** A Storage whose every transaction hands out a statement-counting {@link Tx}. */
+    /** A Storage whose every transaction hands out statement-counting repositories. */
     private record Counting(Storage delegate, Map<String, Long> counts, AtomicLong total)
             implements Storage {
 
         @Override public void migrate() { delegate.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
-            return delegate.inTx(tx -> work.apply(watch(tx, counts, total)));
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
+            return delegate.inShard(shard, r -> work.apply(watch(r, counts, total)));
         }
 
         @Override public void close() { delegate.close(); }
     }
 
     /** Counts the mutating calls -- what a JDBC backend turns into statements. */
-    private static Tx watch(Tx delegate, Map<String, Long> counts, AtomicLong total) {
+    private static WriteRepositories watch(WriteRepositories delegate, Map<String, Long> counts, AtomicLong total) {
         Set<String> writes = Set.of("updateToken", "insertToken", "updateInstance",
                 "insertInstance", "appendCompensation", "markCompensated");
-        InvocationHandler h = (proxy, method, args) -> {
-            Object out = method.invoke(delegate, args);
-            if (writes.contains(method.getName())) {
-                counts.merge(method.getName(), 1L, Long::sum);
-                total.incrementAndGet();
-            }
-            return out;
-        };
-        return (Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(), new Class<?>[]{Tx.class}, h);
+        return WatchedRepositories.watch(delegate, (method, args, out) -> {
+            if (!writes.contains(method.getName())) return;
+            counts.merge(method.getName(), 1L, Long::sum);
+            total.incrementAndGet();
+        });
     }
 
     /** n0 -> n1 -> ... -> n(steps-1) -> end, every node a task on one queue. */

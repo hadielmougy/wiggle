@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -22,7 +23,7 @@ class ServerRoleTest {
 
     @Test @DisplayName("a server serves the engine on a bound API port")
     void cellServesEngine() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start()) {
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start()) {
             assertNotNull(server.engine(), "a server exposes the engine");
             assertTrue(server.port() > 0, "a server binds the WiggleControlPlane port");
         }

@@ -6,6 +6,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -57,7 +58,7 @@ class RegisterHandlersTest {
         ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             body.accept(client, server);
         }

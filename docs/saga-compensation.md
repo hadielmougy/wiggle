@@ -153,8 +153,7 @@ CompLogEntry(instanceId, seq, activity, queue, retry, inputSnapshotJson, resultS
 
 The log is bounded by the number of *compensatable* steps actually run — small by construction
 (you compensate the few steps with external side effects, not reads). Storage: a new
-`comp_log` table (JDBC) / map (in-memory), mirroring the token store's shape, added behind the
-`Tx` seam (`server/.../store/Tx.java`) — never on the hot path of non-compensating workflows.
+`comp_log` table, mirroring the token store's shape, behind `CompensationRepository` — never on the hot path of non-compensating workflows.
 
 > **Why snapshot and not re-read current context?** Because under replace semantics the current
 > context is not guaranteed to still contain `paymentRef`. Snapshotting at completion is the only
@@ -252,7 +251,7 @@ may treat a child's `COMPENSATION_FAILED` as its own compensation failure — co
 |---|---|---|
 | DSL | `client/.../dsl/WorkflowBuilder.java`, `Pipeline.java` | `compensate(...)` overloads attaching a `Compensation` to the just-added TASK node |
 | Graph model | `core/.../Node.java`, `NodeDraft.java` | nullable `Compensation` field; JSON round-trip; folds into `fingerprint` |
-| Comp-log store | `server/.../store/Tx.java`, `InMemoryStorage.java`, `jdbc/…` | a bounded `comp_log` (append on compensatable completion, read/mark in the phase) |
+| Comp-log store | `server/.../store/CompensationRepository.java`, `jdbc/…` | a bounded `comp_log` (append on compensatable completion, read/mark in the phase) |
 | Capture | `WorkflowEngine.applyStepResult` (`:881`) | on a compensatable step's completion, append a comp-log entry with the returned-context snapshot |
 | Phase | `WorkflowEngine.failInstance` (`:1366`) + new `driveCompensation` | branch into `COMPENSATING`; mint/settle compensator tokens over the existing dispatch path; derive the cursor; land `COMPENSATED`/`COMPENSATION_FAILED` |
 | States | `Rows.InstanceStatus` (`store/Rows.java:9`) | add the three states; teach terminal checks and the purge/retention path |

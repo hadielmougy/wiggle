@@ -8,7 +8,7 @@ import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,9 +56,9 @@ class StorageFailureStatusTest {
 
         @Override public void migrate() { delegate.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             Classification how = failWith.get();
-            if (how == null) return delegate.inTx(work);
+            if (how == null) return delegate.inShard(shard, work);
             attempts.incrementAndGet();
             throw new StorageException("relation \"wf_instance\" on host db-7: connection reset", null, how);
         }

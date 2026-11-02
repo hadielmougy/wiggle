@@ -153,8 +153,8 @@ Every path below lands in `Instances.fail`:
   retrying and cancelling all clear both.
 - A retry is not a distinct state. It is `READY` with `availableAt` in the future,
   indistinguishable from a freshly minted token except in time.
-- An instance is terminal when it is neither `RUNNING` nor `COMPENSATING`. Three
-  places encode that rule — `InstanceView.isTerminal`, the JDBC purge query, and
-  the in-memory purge — and the test holds them to each other.
+- An instance is terminal when it is neither `RUNNING` nor `COMPENSATING`. Two
+  places encode that rule — `InstanceView.isTerminal` and the purge query — and
+  the test holds them to each other.
 - Repeated delivery is conflict-safe rather than idempotent: a second `report` or
   `fail` for the same token fails its lease check and is rejected as a conflict.

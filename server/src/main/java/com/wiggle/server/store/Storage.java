@@ -3,29 +3,20 @@ package com.wiggle.server.store;
 import com.wiggle.core.ShardIds;
 
 import java.util.List;
-import java.util.function.Consumer;
 import java.util.function.Function;
 
 /**
  * Storage SPI for the engine. Implementations must make each transaction atomic and must honour
- * {@link Tx#lockInstance} as a mutual-exclusion point for a single workflow instance.
+ * {@link InstanceRepository#lockInstance} as a mutual-exclusion point for a single workflow instance.
  *
- * <p>The engine opens transactions through the routed entry points: {@link #inTxFor} for the shard an
- * instance or token id carries, {@link #inShard} for one shard by number, {@link #inHome} for the
- * cluster-global rows, and {@link #readShard} / {@link #readFor} for reads that never write. A store
- * over one database answers all of them with {@link #inTx}.
+ * <p>A transaction runs on one shard: {@link #inShard} to write, {@link #readShard} to read. Callers open
+ * them through {@link ShardTransactions}, which binds the transaction's repositories to the thread for
+ * {@link Repositories}. A store over one database runs every shard's transactions on it.
  */
 public interface Storage extends AutoCloseable {
 
     /** Applies the engine schema ({@code wf_*} tables). */
     void migrate();
-
-    /** An unrouted transaction on a store with one database. */
-    <R> R inTx(Function<Tx, R> work);
-
-    default void inTxVoid(Consumer<Tx> work) {
-        inTx(tx -> { work.accept(tx); return null; });
-    }
 
     /** The shard holding the cluster-global rows: nodes, schedules, event cursors. */
     default int home() { return 0; }
@@ -39,26 +30,12 @@ public interface Storage extends AutoCloseable {
     /** The shard {@code id} lives on: the one it carries, or {@link #home} when it carries none. */
     default int shardOf(String id) { return ShardIds.shardOf(id).orElse(home()); }
 
-    /** A transaction on one shard. */
-    default <R> R inShard(int shard, Function<Tx, R> work) { return inTx(work); }
+    /** Runs {@code body} in a write transaction of its own on {@code shard}, on its connection of its own. */
+    <R> R inShard(int shard, Function<WriteRepositories, R> body);
 
-    /** A transaction on the shard that holds the instance or token {@code id}. */
-    default <R> R inTxFor(String id, Function<Tx, R> work) { return inShard(shardOf(id), work); }
-
-    /** A transaction on the {@link #home} shard. */
-    default <R> R inHome(Function<Tx, R> work) { return inShard(home(), work); }
-
-    /** A transaction on the {@link #auth} shard. */
-    default <R> R inAuth(Function<Tx, R> work) { return inShard(auth(), work); }
-
-    /** A read-only transaction on one shard, served by a replica when {@code freshness} allows. */
-    default <R> R readShard(int shard, Freshness freshness, Function<ReadTx, R> work) {
-        return inShard(shard, work::apply);
-    }
-
-    /** {@link #readShard} on the shard that holds the instance or token {@code id}. */
-    default <R> R readFor(String id, Freshness freshness, Function<ReadTx, R> work) {
-        return readShard(shardOf(id), freshness, work);
+    /** Runs {@code body} in a read-only transaction of its own on {@code shard}, served by a replica when {@code freshness} allows. */
+    default <R> R readShard(int shard, Freshness freshness, Function<ReadRepositories, R> body) {
+        return inShard(shard, body::apply);
     }
 
     /** Whether any shard has read replicas, so something must keep their lag measured. */
@@ -74,7 +51,7 @@ public interface Storage extends AutoCloseable {
     /**
      * A stable identity of the underlying store: the same for every node pointed at the same
      * database, and different across databases. Returns {@code null} when the backend has no
-     * cross-node identity (e.g. in-memory, which cannot be shared between processes).
+     * cross-node identity.
      */
     default String fingerprint() { return null; }
 

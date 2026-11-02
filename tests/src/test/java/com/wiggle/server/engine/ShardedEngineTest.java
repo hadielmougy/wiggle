@@ -5,13 +5,16 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.ShardIds;
 import com.wiggle.core.TaskActivation;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.tests.Modes;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -42,10 +45,10 @@ class ShardedEngineTest {
             (f, s) -> Modes.in(f, ExecutionMode.LOCAL_ASYNC).thenApply(s::x).thenApply(s::y));
 
     /** Shard 1 first, so the first instance lands off the home shard (0). */
-    private record Fixture(InMemoryStorage one, InMemoryStorage zero, ShardedStorage storage, WorkflowEngine engine) {
+    private record Fixture(JdbcStorage one, JdbcStorage zero, ShardedStorage storage, WorkflowEngine engine) {
         static Fixture open() {
-            InMemoryStorage one = new InMemoryStorage();
-            InMemoryStorage zero = new InMemoryStorage();
+            JdbcStorage one = PostgresStorageFactory.inMemory();
+            JdbcStorage zero = PostgresStorageFactory.inMemory();
             Map<Integer, Storage> shards = new LinkedHashMap<>();
             shards.put(1, one);
             shards.put(0, zero);
@@ -89,9 +92,9 @@ class ShardedEngineTest {
         for (String id : ids) {
             Storage holder = f.shard(id);
             Storage other = holder == f.one() ? f.zero() : f.one();
-            assertTrue(holder.inTx(tx -> tx.findInstance(id)).isPresent(), id + " is on its shard");
-            assertTrue(other.inTx(tx -> tx.findInstance(id)).isEmpty(), id + " is nowhere else");
-            holder.inTx(tx -> tx.tokensOf(id)).forEach(t ->
+            assertTrue(TestTx.inHome(holder, () -> Repositories.instances().findInstance(id)).isPresent(), id + " is on its shard");
+            assertTrue(TestTx.inHome(other, () -> Repositories.instances().findInstance(id)).isEmpty(), id + " is nowhere else");
+            TestTx.inHome(holder, () -> Repositories.tokens().tokensOf(id)).forEach(t ->
                     assertEquals(ShardIds.shardOf(id), ShardIds.shardOf(t.id), "its tokens are with it"));
         }
     }
@@ -99,8 +102,8 @@ class ShardedEngineTest {
     @Test @DisplayName("registration writes the definition to every shard")
     void registrationReachesEveryShard() {
         Fixture f = Fixture.open();
-        assertTrue(f.one().inTx(tx -> tx.latestVersion(FLOW.name())).isPresent());
-        assertTrue(f.zero().inTx(tx -> tx.latestVersion(FLOW.name())).isPresent());
+        assertTrue(TestTx.inHome(f.one(), () -> Repositories.graph().latestVersion(FLOW.name())).isPresent());
+        assertTrue(TestTx.inHome(f.zero(), () -> Repositories.graph().latestVersion(FLOW.name())).isPresent());
     }
 
     @Test @DisplayName("a claim takes one shard at a time and the next claim reaches the other")
@@ -170,6 +173,6 @@ class ShardedEngineTest {
         List<InstanceView> fired = f.engine().list(FLOW.name(), null, 10);
         assertEquals(1, fired.size());
         assertEquals(OptionalInt.of(0), ShardIds.shardOf(fired.getFirst().id()));
-        assertTrue(f.zero().inTx(tx -> tx.findInstance(fired.getFirst().id())).isPresent());
+        assertTrue(TestTx.inHome(f.zero(), () -> Repositories.instances().findInstance(fired.getFirst().id())).isPresent());
     }
 }

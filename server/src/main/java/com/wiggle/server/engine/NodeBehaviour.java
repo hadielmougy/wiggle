@@ -236,7 +236,7 @@ abstract class NodeBehaviour {
             if (group == null) return TokenPayload.EMPTY;
             int hash = group.lastIndexOf('#');
             String forkTokenId = hash < 0 ? group : group.substring(0, hash);
-            return Repositories.locks().findToken(forkTokenId).map(f -> f.payload).orElse(TokenPayload.EMPTY);
+            return Repositories.tokens().findToken(forkTokenId).map(f -> f.payload).orElse(TokenPayload.EMPTY);
         }
     }
 

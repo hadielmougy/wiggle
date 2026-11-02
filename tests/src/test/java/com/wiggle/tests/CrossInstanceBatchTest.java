@@ -9,6 +9,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -68,7 +69,7 @@ class CrossInstanceBatchTest {
                 Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b))
                         .combine(s::pick)
                         .executeInLocalAsync());
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "xib-w",
                      WorkerOptions.defaults().withConcurrency(8).withCrossInstanceBatching(true)).registerHandler(new H())) {
@@ -103,7 +104,7 @@ class CrossInstanceBatchTest {
                 .executeInLocalAsync()
                 .thenApply(s::x)
                 .thenApply(s::y));
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             client.start(bp, Map.of());

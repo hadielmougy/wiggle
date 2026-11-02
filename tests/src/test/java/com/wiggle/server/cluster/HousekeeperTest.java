@@ -1,11 +1,11 @@
 package com.wiggle.server.cluster;
 
 import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -47,7 +47,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("adaptive tick drains a backlog larger than one batch; fixed tick does not")
     void adaptiveTickDrains() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(storage, "hk-d", 1, 5000, 3)) {
             storage.migrate();
             cluster.start();
@@ -69,7 +69,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("a housekeeper built without the flag drains: adaptive is the default")
     void adaptiveIsTheDefault() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(storage, "hk-default", 1, 5000, 3)) {
             storage.migrate();
             cluster.start();
@@ -87,7 +87,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("within the reconnect grace a lease claimed before the node started is spared; one claimed after is not")
     void reconnectGraceSparesLeasesFromBeforeStart() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(storage, "hk-grace", 1, 5000, 3)) {
             storage.migrate();
             cluster.start();
@@ -114,7 +114,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("with no reconnect grace an expired lease from before the node started is reclaimed")
     void noGraceReclaimsAtOnce() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(storage, "hk-nograce", 1, 5000, 3)) {
             storage.migrate();
             cluster.start();
@@ -134,7 +134,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("a leader tick fires due timers")
     void leaderTickFiresTimers() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(storage, "hk-a", 1, 5000, 3)) {
             storage.migrate();
             cluster.start();
@@ -158,7 +158,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("a non-leader tick does nothing")
     void nonLeaderTickIsInert() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager first = new ClusterManager(storage, "hk-first", 1, 5000, 3)) {
             storage.migrate();
             first.start();
@@ -184,10 +184,10 @@ class HousekeeperTest {
     void tickSurvivesFailure() {
         Storage broken = new Storage() {
             @Override public void migrate() { }
-            @Override public <R> R inTx(Function<Tx, R> work) { throw new RuntimeException("storage down"); }
+            @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) { throw new RuntimeException("storage down"); }
             @Override public void close() { }
         };
-        try (Storage healthy = new InMemoryStorage();
+        try (Storage healthy = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(healthy, "hk-c", 1, 5000, 3)) {
             healthy.migrate();
             cluster.start();
@@ -200,7 +200,7 @@ class HousekeeperTest {
 
     @Test @DisplayName("the retention sweep purges old terminal instances, and only as leader")
     void retentionPurgesTerminalInstances() throws Exception {
-        try (Storage storage = new InMemoryStorage();
+        try (Storage storage = PostgresStorageFactory.inMemory();
              ClusterManager cluster = new ClusterManager(storage, "hk-d", 1, 5000, 3)) {
             storage.migrate();
             cluster.start();

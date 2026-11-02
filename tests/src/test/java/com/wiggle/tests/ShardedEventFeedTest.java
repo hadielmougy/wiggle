@@ -4,9 +4,9 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.EventView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.testfixtures.TestPorts;
@@ -42,8 +42,8 @@ class ShardedEventFeedTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
         return new WiggleServer(config, c -> {
             Map<Integer, Storage> shards = new LinkedHashMap<>();
-            shards.put(1, new InMemoryStorage());
-            shards.put(0, new InMemoryStorage());
+            shards.put(1, PostgresStorageFactory.inMemory());
+            shards.put(0, PostgresStorageFactory.inMemory());
             return new ShardedStorage(shards, 0);
         }).start();
     }

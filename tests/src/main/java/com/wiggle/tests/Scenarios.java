@@ -9,10 +9,10 @@ import com.wiggle.client.worker.Step;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.cluster.ClusterManager;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
 import com.wiggle.testfixtures.TestPorts;
@@ -108,7 +108,7 @@ public final class Scenarios {
 
     /** The store a scenario's server runs on, per thread so suites can run in parallel. */
     private static final ThreadLocal<StorageFactory> STORAGE =
-            ThreadLocal.withInitial(() -> config -> new InMemoryStorage());
+            ThreadLocal.withInitial(() -> config -> PostgresStorageFactory.inMemory());
 
     /** Runs the scenarios this thread starts on stores from {@code factory}; null restores in-memory. */
     public static void useStorage(StorageFactory factory) {
@@ -606,7 +606,7 @@ public final class Scenarios {
      * as the longest-running node, and failover when that node goes away.
      */
     public static void leaderElectionAndFailover() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             ClusterManager first = new ClusterManager(storage, "node-a", 2, 150, 3);
             first.start();

@@ -10,8 +10,8 @@ public final class CurrentTx {
 
     private CurrentTx() {}
 
-    /** One bound transaction: the store's view of it, its shard, and whether it may write. */
-    record Scope(ReadTx tx, int shard, boolean write) { }
+    /** One bound transaction: its repositories, its shard, and whether it may write. */
+    record Scope(ReadRepositories repositories, int shard, boolean write) { }
 
     private static final ThreadLocal<Scope> CURRENT = new ThreadLocal<>();
 
@@ -19,10 +19,10 @@ public final class CurrentTx {
         return CURRENT.get();
     }
 
-    /** Runs {@code body} with {@code tx} bound as the calling thread's transaction on {@code shard}. */
-    static <R> R bind(ReadTx tx, int shard, boolean write, Supplier<R> body) {
+    /** Runs {@code body} with {@code repositories} bound as the calling thread's transaction on {@code shard}. */
+    static <R> R bind(ReadRepositories repositories, int shard, boolean write, Supplier<R> body) {
         Scope outer = CURRENT.get();
-        CURRENT.set(new Scope(tx, shard, write));
+        CURRENT.set(new Scope(repositories, shard, write));
         try {
             return body.get();
         } finally {
@@ -31,17 +31,17 @@ public final class CurrentTx {
         }
     }
 
-    /** The calling thread's transaction; refused when none is open. */
-    public static ReadTx require() {
+    /** The repositories of the calling thread's transaction; refused when none is open. */
+    public static ReadRepositories require() {
         Scope scope = CURRENT.get();
         if (scope == null) throw new IllegalStateException("no transaction is open on this thread; open one through ShardTransactions");
-        return scope.tx();
+        return scope.repositories();
     }
 
-    /** The calling thread's write transaction; refused when none, or only a read, is open. */
-    public static Tx requireWrite() {
+    /** The repositories of the calling thread's write transaction; refused when none, or only a read, is open. */
+    public static WriteRepositories requireWrite() {
         Scope scope = CURRENT.get();
         if (scope == null || !scope.write()) throw new IllegalStateException("no write transaction is open on this thread");
-        return (Tx) scope.tx();
+        return (WriteRepositories) scope.repositories();
     }
 }

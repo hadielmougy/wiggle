@@ -11,6 +11,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.EventView;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -103,7 +104,7 @@ class EventLogTest {
                     (f, s) -> f.thenApplyCompensable(s::reserve).thenApply(s::boom));
             FlowSpec parked = FlowSpec.define("evt-parked", 1, Map.class, ParkedSteps.class,
                     (f, s) -> f.thenApply(s::a).thenAwait("approval").thenApply(s::after));
-            try (WiggleServer server = new WiggleServer(config()).start();
+            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker worker = new Worker(client, "w-events", WorkerOptions.defaults().withConcurrency(2))
                          .registerHandler(new LinearH()).registerHandler(new FailingH())
@@ -155,7 +156,7 @@ class EventLogTest {
     @Test @DisplayName("retention drops entries older than the window; with no consumer, age alone decides")
     void retention() throws Exception {
         System.setProperty("wiggle.events.retentionMillis", "1");
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-retain", WorkerOptions.defaults()).registerHandler(new LinearH())) {
             FlowSpec linear = FlowSpec.define("evt-linear", 1, Map.class, Steps.class,

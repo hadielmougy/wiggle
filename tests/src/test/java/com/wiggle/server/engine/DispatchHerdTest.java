@@ -6,15 +6,15 @@ import com.wiggle.core.TaskActivation;
 import com.wiggle.core.criteria.AttrType;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.ClaimFilter;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
+import com.wiggle.tests.WatchedRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -38,27 +38,20 @@ class DispatchHerdTest {
         Map<String, Object> work(Map<String, Object> ctx);
     }
 
-    /** {@link InMemoryStorage} that counts {@code claimTasks} calls. */
+    /** An H2 store that counts {@code claimTasks} calls. */
     private static final class CountingStorage implements Storage {
-        final InMemoryStorage delegate = new InMemoryStorage();
+        final JdbcStorage delegate = PostgresStorageFactory.inMemory();
         final AtomicInteger claims = new AtomicInteger();
         final Map<String, AtomicInteger> claimsBy = new java.util.concurrent.ConcurrentHashMap<>();
 
         @Override public void migrate() { delegate.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
-            return delegate.inTx(tx -> work.apply((Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(),
-                    new Class<?>[]{Tx.class}, (proxy, method, args) -> {
-                        if (method.getName().equals("claimTasks")) {
-                            claims.incrementAndGet();
-                            claimsBy.computeIfAbsent((String) args[0], k -> new AtomicInteger()).incrementAndGet();
-                        }
-                        try {
-                            return method.invoke(tx, args);
-                        } catch (InvocationTargetException e) {
-                            throw e.getCause();
-                        }
-                    })));
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
+            return delegate.inShard(shard, r -> work.apply(WatchedRepositories.watch(r, (method, args, out) -> {
+                if (!method.getName().equals("claimTasks")) return;
+                claims.incrementAndGet();
+                claimsBy.computeIfAbsent((String) args[0], k -> new AtomicInteger()).incrementAndGet();
+            })));
         }
 
         @Override public void close() { delegate.close(); }

@@ -1,6 +1,7 @@
 package com.wiggle.server.api;
 
 import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -28,7 +29,7 @@ class HttpApiTest {
 
     @Test @DisplayName("a request is answered in JSON; an empty body is an empty message")
     void json() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start()) {
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start()) {
             RawApi.Answer health = RawApi.callJson(server.baseUrl(), ControlPlane.HEALTH_CHECK, "");
             assertEquals(200, health.status());
             assertEquals("UP", health.msg().str("status"));
@@ -43,7 +44,7 @@ class HttpApiTest {
 
     @Test @DisplayName("an unknown method is 404, any verb but POST 405, a malformed body 400")
     void routing() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()) {
             String base = "http://" + server.baseUrl();
             HttpResponse<String> unknown = http.send(HttpRequest.newBuilder(URI.create(base + "/v1/Nope"))
@@ -64,7 +65,7 @@ class HttpApiTest {
 
     @Test @DisplayName("a field of the wrong type, or a oneof with two members set, is 400")
     void fieldChecks() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start()) {
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start()) {
             RawApi.Answer wrongType = RawApi.callJson(server.baseUrl(), ControlPlane.LIST_INSTANCES, "{\"limit\": \"ten\"}");
             assertEquals(400, wrongType.status());
             assertTrue(wrongType.message().contains("'limit'"), wrongType.message());
@@ -81,7 +82,7 @@ class HttpApiTest {
 
     @Test @DisplayName("a request body over the limit is refused with 413")
     void tooLarge() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()) {
             byte[] body = new byte[HttpApi.MAX_BODY_BYTES + 1];
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder(URI.create("http://" + server.baseUrl()

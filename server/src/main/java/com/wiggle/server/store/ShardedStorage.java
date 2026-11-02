@@ -18,9 +18,6 @@ import java.util.function.Function;
  * A {@link Storage} over several databases, one {@link Storage} per shard. It only routes: every
  * transaction runs on the one shard its entry point names, and no transaction spans two.
  *
- * <p>An unrouted {@link #inTx} is refused, so a call site that never chose a shard fails instead of
- * writing to an arbitrary database.
- *
  * <p>A shard found unreachable is marked down: routes to it then fail at once with {@link
  * StorageUnreachableException} instead of each waiting out the connection timeout, while a probe in
  * the background, its backoff doubling from {@link #MIN_PROBE_BACKOFF_MILLIS} to {@link
@@ -118,27 +115,28 @@ public final class ShardedStorage implements Storage {
     @Override public void migrate() {
         shards.values().forEach(Storage::migrate);
         for (Member m : members) {
-            int claimed = inShard(m.id(), tx -> {
-                tx.claimShardIdentity(m.id());
-                return tx.shardIdentity().orElseThrow();
+            int claimed = inShard(m.id(), r -> {
+                r.shards().claimShardIdentity(m.id());
+                return r.shards().shardIdentity().orElseThrow();
             });
             if (claimed != m.id()) {
                 throw new IllegalStateException("shard " + m.id() + " points at the database of shard "
                         + claimed + "; check its primary url");
             }
         }
-        retired = inHome(this::reconcileRegistry);
+        retired = inShard(home, this::reconcileRegistry);
         copyDefinitions();
     }
 
     /** Copies onto each instance shard every definition, and its graph, the home shard has and it lacks. */
     private void copyDefinitions() {
-        List<StoredDefinition> registered = inHome(tx -> {
+        List<StoredDefinition> registered = inShard(home, r -> {
+            GraphStore graph = r.graph();
             List<StoredDefinition> out = new ArrayList<>();
-            for (String name : tx.definitionNames()) {
-                for (int version : tx.definitionVersions(name)) {
-                    String body = tx.definition(name, version).orElseThrow();
-                    GraphStore.StoredFingerprint fp = tx.definitionFingerprint(name, version).orElse(null);
+            for (String name : graph.definitionNames()) {
+                for (int version : graph.definitionVersions(name)) {
+                    String body = graph.definition(name, version).orElseThrow();
+                    GraphStore.StoredFingerprint fp = graph.definitionFingerprint(name, version).orElse(null);
                     out.add(new StoredDefinition(name, version, body, fp));
                 }
             }
@@ -147,13 +145,14 @@ public final class ShardedStorage implements Storage {
         if (registered.isEmpty()) return;
         for (int shard : instanceShards) {
             if (shard == home) continue;
-            inShard(shard, tx -> {
+            inShard(shard, r -> {
+                GraphStore graph = r.graph();
                 for (StoredDefinition d : registered) {
-                    if (tx.definition(d.name(), d.version()).isPresent()) continue;
-                    tx.putDefinition(d.name(), d.version(), d.body(),
+                    if (graph.definition(d.name(), d.version()).isPresent()) continue;
+                    graph.putDefinition(d.name(), d.version(), d.body(),
                             d.fingerprint() == null ? null : d.fingerprint().value(),
                             d.fingerprint() == null ? null : d.fingerprint().algo());
-                    tx.putGraph(WorkflowDefinition.fromJson(Json.parse(d.body())));
+                    graph.putGraph(WorkflowDefinition.fromJson(Json.parse(d.body())));
                 }
                 return null;
             });
@@ -163,29 +162,29 @@ public final class ShardedStorage implements Storage {
     private record StoredDefinition(String name, int version, String body, GraphStore.StoredFingerprint fingerprint) {}
 
     /** Brings the registry up to the listed states and returns the retired shard ids. */
-    private Set<Integer> reconcileRegistry(Tx tx) {
+    private Set<Integer> reconcileRegistry(WriteRepositories r) {
         long now = System.currentTimeMillis();
         Map<Integer, Rows.ShardRecord> known = new LinkedHashMap<>();
-        tx.shardRegistry().forEach(r -> known.put(r.shardId(), r));
+        r.shards().shardRegistry().forEach(rec -> known.put(rec.shardId(), rec));
         for (Member m : members) {
-            Rows.ShardRecord r = known.get(m.id());
-            if (r != null && m.state().ordinal() < r.state().ordinal()) {
+            Rows.ShardRecord rec = known.get(m.id());
+            if (rec != null && m.state().ordinal() < rec.state().ordinal()) {
                 throw new IllegalStateException("shard " + m.id() + " is listed " + m.state() + " but the registry "
-                        + "records it " + r.state() + "; a shard's state only moves forward");
+                        + "records it " + rec.state() + "; a shard's state only moves forward");
             }
-            if (r != null && r.state() == m.state()) continue;
+            if (rec != null && rec.state() == m.state()) continue;
             if (m.state() == ShardState.RETIRED) requireEmpty(m);
-            Rows.ShardRecord next = new Rows.ShardRecord(m.id(), m.state(), r == null ? now : r.firstSeen(),
+            Rows.ShardRecord next = new Rows.ShardRecord(m.id(), m.state(), rec == null ? now : rec.firstSeen(),
                     m.state() == ShardState.RETIRED ? Long.valueOf(now) : null);
-            tx.putShardRecord(next);
+            r.shards().putShardRecord(next);
             known.put(m.id(), next);
         }
         Set<Integer> out = new HashSet<>();
-        for (Rows.ShardRecord r : known.values()) {
-            if (r.state() == ShardState.RETIRED) {
-                out.add(r.shardId());
-            } else if (!shards.containsKey(r.shardId())) {
-                throw new IllegalStateException("the registry records shard " + r.shardId() + " as " + r.state()
+        for (Rows.ShardRecord rec : known.values()) {
+            if (rec.state() == ShardState.RETIRED) {
+                out.add(rec.shardId());
+            } else if (!shards.containsKey(rec.shardId())) {
+                throw new IllegalStateException("the registry records shard " + rec.shardId() + " as " + rec.state()
                         + ", but it is not listed; list it until it is drained and retired");
             }
         }
@@ -193,9 +192,9 @@ public final class ShardedStorage implements Storage {
     }
 
     private void requireEmpty(Member m) {
-        int live = inShard(m.id(), tx -> {
+        int live = inShard(m.id(), r -> {
             int n = 0;
-            for (InstanceStatus s : InstanceStatus.values()) if (s.live()) n += tx.countInstances(s);
+            for (InstanceStatus s : InstanceStatus.values()) if (s.live()) n += r.instances().countInstances(s);
             return n;
         });
         if (live > 0) {
@@ -204,21 +203,16 @@ public final class ShardedStorage implements Storage {
         }
     }
 
-    @Override public <R> R inTx(Function<Tx, R> work) {
-        throw new IllegalStateException("unrouted transaction on a sharded store: open it with inTxFor, "
-                + "inShard, inHome, inAuth, readFor or readShard");
-    }
-
     @Override public int home() { return home; }
 
     @Override public int auth() { return auth; }
 
     @Override public List<Integer> instanceShards() { return instanceShards; }
 
-    @Override public <R> R inShard(int shard, Function<Tx, R> work) {
+    @Override public <R> R inShard(int shard, Function<WriteRepositories, R> body) {
         Storage s = reachable(shard);
         try {
-            return s.inTx(work);
+            return s.inShard(shard, body);
         } catch (StorageUnreachableException e) {
             markDown(shard);
             throw e;
@@ -226,10 +220,10 @@ public final class ShardedStorage implements Storage {
     }
 
     /** A replica-allowed read on a shard with replicas is not refused while its primary is down. */
-    @Override public <R> R readShard(int shard, Freshness freshness, Function<ReadTx, R> work) {
+    @Override public <R> R readShard(int shard, Freshness freshness, Function<ReadRepositories, R> body) {
         Storage s = freshness == Freshness.REPLICA_OK && shard(shard).hasReplicas() ? shard(shard) : reachable(shard);
         try {
-            return s.readShard(shard, freshness, work);
+            return s.readShard(shard, freshness, body);
         } catch (StorageUnreachableException e) {
             markDown(shard);
             throw e;
@@ -262,7 +256,7 @@ public final class ShardedStorage implements Storage {
     /** Reaches {@code shard} once: up, it is routed to again; still down, its next probe backs off. */
     private void probe(int shard, Storage s, Outage o) {
         try {
-            s.inTx(ReadTx::shardIdentity);
+            s.readShard(shard, Freshness.PRIMARY, r -> r.shards().shardIdentity());
             down.remove(shard, o);
             LOG.log(System.Logger.Level.INFO, () -> "shard " + shard + " is reachable again");
         } catch (RuntimeException e) {

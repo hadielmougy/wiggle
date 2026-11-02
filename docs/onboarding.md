@@ -59,9 +59,9 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 |---|---|---|
 | `core` | JSON, the compiled graph model, retry policy, execution mode, wire records, the API's methods and JSON messages | `wiggle-core` |
 | `client` | the workflow DSL, `WiggleClient`, the pulling `Worker` | `wiggle-client` |
-| `server` | engine, cluster manager, housekeeper, HTTP API, `/healthz` probe, in-memory store, injected `StorageFactory` | `wiggle-server` |
+| `server` | engine, cluster manager, housekeeper, HTTP API, `/healthz` probe, injected `StorageFactory` | `wiggle-server` |
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
-| `postgres` | PostgreSQL dialect, plus H2 for tests and local runs, and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
+| `postgres` | PostgreSQL dialect, plus H2 for tests and local runs (in memory when no URL is set), and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
 | `election` | leader election by announce-and-heartbeat, used for intra-cluster leadership | *(not published)* |
 | `dist` | runnable standalone server (what the Docker image runs); its `WiggleStorageFactory` is `PostgresStorageFactory` under the published name | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
@@ -83,8 +83,8 @@ clash with anything already on the classpath). See the README's install section 
 
 ### 4.1 Quickstart: Docker server + Java client
 
-Start a local server in a terminal. This uses the in-memory store, so stopping the container resets
-its data:
+Start a local server in a terminal. With no database configured it keeps its data in an H2 database
+in memory, so stopping the container resets it:
 
 ```bash
 docker run --rm --name wiggle -p 8080:8080 hadielmougy/wiggle:0.0.10
@@ -645,8 +645,8 @@ With no `WIGGLE_DASHBOARD_PASSWORD` and no account in the database yet, the port
 (`WIGGLE_DASHBOARD_USER`, default `admin`), stores it hashed in the database (the auth shard), and
 signs you in. After that the setup screen is gone for good, on every node, and the admin signs in
 like any other account. Until it is done, anyone who can reach the portal port can do it, so set
-it straight after the first start, or set `WIGGLE_DASHBOARD_PASSWORD` to skip setup. On the
-in-memory store the password goes with the process.
+it straight after the first start, or set `WIGGLE_DASHBOARD_PASSWORD` to skip setup. With no
+database configured the password goes with the process.
 
 ### 7.1a Users an admin manages
 
@@ -804,7 +804,7 @@ and the leader moves documents in the background, a batch a minute.
 
 ### 7.2 Storage backends
 
-No URL → in-memory (single node, dev/test). With one, the server builds its store from an injected
+No URL → an H2 database in memory (single node, dev/test). Either way the server builds its store from an injected
 `StorageFactory` — **no `ServiceLoader`**: `PostgresStorageFactory` maps the URL scheme to a backend
 at runtime (the distribution's `WiggleStorageFactory` is that class under the image's own name). Both dialects live in `wiggle-postgres` over one HikariCP-pooled
 store (`wiggle-jdbc`): **PostgreSQL** is what you deploy on, and **H2** (in PostgreSQL mode) is for
@@ -899,7 +899,7 @@ reported per node. A worker that stops polling stops counting as cover once its 
 ### 7.6 Benchmarking
 
 ```bash
-# in-memory (async ≈ sync, commits are free):
+# no database configured: H2 in memory
 WIGGLE_EXECUTION_MODE=LOCAL_ASYNC ./gradlew :example:bench
 
 # against Postgres (async wins — far fewer WAL fsyncs):

@@ -4,6 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.core.TaskActivation;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
@@ -41,7 +42,7 @@ class ApiErrorMappingTest {
 
     @Test @DisplayName("unknown ids and workflows surface as 404 over the API")
     void notFound() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             WiggleApiException noTask = assertThrows(WiggleApiException.class,
                     () -> client.reportSteps("tok_nope", "w",
@@ -58,7 +59,7 @@ class ApiErrorMappingTest {
     @Test @DisplayName("settling a task without its lease surfaces as 409 over the API")
     void conflict() throws Exception {
         FlowSpec bp = FlowSpec.define("err-conflict", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             String id = client.start(bp, Map.of());
@@ -77,7 +78,7 @@ class ApiErrorMappingTest {
         FlowSpec bp = FlowSpec.define("err-bad", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenFilter(s::check)
                 .thenApply(s::after));
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             client.start(bp, Map.of());

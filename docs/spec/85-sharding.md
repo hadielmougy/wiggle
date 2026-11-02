@@ -236,8 +236,7 @@ connection.
 **Status: implemented.** Every engine transaction is routed, and `Transactions` (the engine's wrapper)
 has no unrouted entry point left. `ShardedStorage` routes over one `Storage` per shard. Verified by:
 
-- `tests/RoutedConformanceTest`: every engine scenario on a store that refuses an unrouted `inTx`;
-- `tests/ShardedConformanceTest`: every engine scenario on two in-memory shards, the first instance
+- `tests/ShardedConformanceTest`: every engine scenario on two H2 shards in memory, the first instance
   off the home shard;
 - `server/store/ShardedStorageTest` and `server/engine/ShardedEngineTest`: routing, unknown shards,
   and each path that only branches with more than one shard (claims, report batches, merged reads,
@@ -253,29 +252,27 @@ Until a later step:
 
 ### 4.1 Routed transactions
 
-**WGL-SHARD-070** (MUST) `Storage` MUST gain routed entry points. The existing single-database
-implementations satisfy them through the defaults:
+**WGL-SHARD-070** (MUST) Every `Storage` transaction MUST name its shard; there is no unrouted
+entry point. A store over one database runs every shard's transactions on it, through the defaults:
 
 ```java
 default int home() { return 0; }
 default List<Integer> instanceShards() { return List.of(home()); }
 default int shardOf(String id) { return ShardIds.shardOf(id).orElse(home()); }
-default <R> R inShard(int shard, Function<Tx, R> work) { return inTx(work); }
-default <R> R inTxFor(String id, Function<Tx, R> work) { return inShard(shardOf(id), work); }
-default <R> R inHome(Function<Tx, R> work) { return inShard(home(), work); }
-default <R> R readShard(int shard, Freshness f, Function<ReadTx, R> work) { return inShard(shard, work::apply); }
-default <R> R readFor(String id, Freshness f, Function<ReadTx, R> work) { return readShard(shardOf(id), f, work); }
+<R> R inShard(int shard, Function<WriteRepositories, R> body);
+default <R> R readShard(int shard, Freshness f, Function<ReadRepositories, R> body) { return inShard(shard, body::apply); }
 ```
+
+`ShardTransactions` adds the routes by id (`forInstance`, `readFor`), by role (`inHome`, `inAuth`,
+`readHome`) and over every instance shard (`readEach`).
 
 Fan-out runs over `instanceShards()`, not a count: shard ids are permanent and may be sparse.
 
 **WGL-SHARD-071** (MUST) *Implemented.* `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
-per shard primary, and MUST depend on no JDBC type, so it runs over in-memory shards in tests.
+per shard primary, and MUST depend on no JDBC type.
 
-**WGL-SHARD-072** (MUST) *Implemented.* `ShardedStorage.inTx` (unrouted) MUST throw
-`IllegalStateException`. A
-call site that was not moved to a routed entry point then fails every test that runs over two
-shards, instead of silently writing to the wrong database.
+**WGL-SHARD-072** *Withdrawn: with no unrouted entry point left in `Storage`, a call site that
+names no shard does not compile.*
 
 **WGL-SHARD-073** (MUST) Each shard keeps the failure classification and replay rules of
 [chapter 80 §9](80-storage.md) unchanged; a transaction is replayed only on the shard it ran on.
@@ -291,16 +288,17 @@ the shard unreachable waits out the pool's connection timeout.
 
 ### 4.2 Read-only transactions
 
-**WGL-SHARD-080** (MUST) The read-only part of `Tx` MUST be split out as `ReadTx`, and `Tx` MUST
-extend it. A replica connection MUST be opened read-only and MUST be handed out only as a `ReadTx`, so
-a write through a replica does not compile.
+**WGL-SHARD-080** (MUST) The reads of each area MUST be split out as a `*Reads` interface that its
+repository extends, and `ReadRepositories` MUST hand out only those. A replica connection MUST be
+opened read-only and MUST be handed out only as `ReadRepositories`, so a write through a replica does
+not compile.
 
-**WGL-SHARD-081** (MUST) `ReadTx` MUST contain at least: `findInstance`, `findToken`, `tokensOf`,
+**WGL-SHARD-081** (MUST) The reads MUST contain at least: `findInstance`, `findToken`, `tokensOf`,
 `listInstances`, `findByCorrelation`, `countInstances`, `pendingSignals`, `backlogByVersion`,
 `queueDepth`, `childInstanceIds`, `schedules`, `nodes`,
 `compensationLog`, `stepDurations`, the event-log reads, and the graph reads (`GraphReads`, split
 out of `GraphStore`). Locking reads (`lockInstance`, `lockTask`, `definitionFingerprint`) stay on
-`Tx`.
+the repositories that write.
 
 **WGL-SHARD-082** (MUST) `Freshness` MUST be `PRIMARY` or `REPLICA_OK`, chosen **per call site**,
 not per method: the same `findInstance` is a primary read inside start and a replica read in the
@@ -312,7 +310,7 @@ console.
 
 | Operation | Route | Freshness |
 |---|---|---|
-| start, report, fail, heartbeat, signal, cancel | `inTxFor(id)` | primary |
+| start, report, fail, heartbeat, signal, cancel | `forInstance(id)` | primary |
 | claim | rotation over shards ([§6](#6-claims)) | primary |
 | leader sweeps: timers, retries, signal deadlines, lease reclaim, retention | each shard, in parallel | primary |
 | register workflow (definition and `wf_graph_*` rows) | every shard ([WGL-SHARD-100](#7-global-data)) | primary |
@@ -666,7 +664,7 @@ Search runs when a topology shard carries the `search` role, or on the one datab
   A filter on them is a semi-join on the value index, so it reads the matching rows, not the table.
 - **Document text.** The text is the correlation id, the context JSON, the termination reason and the
   error, capped at 64 KB. It is matched with Postgres `tsvector` over the `simple` configuration (words
-  as written, no stemming) and ranked by `ts_rank`. Other databases, and the in-memory store, match
+  as written, no stemming) and ranked by `ts_rank`. Other databases match
   word for word in Java with the same semantics.
 - **Shards and upkeep.** `SearchIndex` places, queries, retains (`WIGGLE_SEARCH_RETENTION_MILLIS`,
   default 30 days) and rebalances. `WIGGLE_SEARCH_WORKFLOWS` limits which workflows are indexed.

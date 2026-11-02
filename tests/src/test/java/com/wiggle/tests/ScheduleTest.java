@@ -2,9 +2,10 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
@@ -35,7 +36,7 @@ class ScheduleTest {
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")
     void firesAndRearms() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             FlowSpec bp = probe();
@@ -61,18 +62,18 @@ class ScheduleTest {
 
     @Test @DisplayName("the fire-time claim is a compare-and-set: a stale sweep cannot double-fire")
     void staleClaimCannotDoubleFire() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             engine.register(probe().definition());
             engine.createSchedule("sched-probe", Duration.ofMillis(50), Map.of());
             Thread.sleep(80);
 
-            Rows.Schedule stale = storage.inTx(tx -> tx.dueSchedules(System.currentTimeMillis(), 10)).get(0);
+            Rows.Schedule stale = TestTx.inHome(storage, () -> Repositories.schedules().dueSchedules(System.currentTimeMillis(), 10)).get(0);
             assertEquals(1, engine.fireDueSchedules(10), "first sweep fires");
             // A second actor holding the stale snapshot loses the CAS and must not start anything.
-            boolean claimed = storage.inTx(tx ->
-                    tx.claimSchedule(stale.id, stale.nextFireAt, System.currentTimeMillis() + 1000));
+            boolean claimed = TestTx.inHome(storage, () ->
+                    Repositories.schedules().claimSchedule(stale.id, stale.nextFireAt, System.currentTimeMillis() + 1000));
             assertTrue(!claimed, "the stale fire time no longer matches");
             assertEquals(1, engine.list("sched-probe", null, 10).size(), "still exactly one instance");
         }
@@ -80,7 +81,7 @@ class ScheduleTest {
 
     @Test @DisplayName("deleting a schedule stops it; creating one for an unknown workflow fails")
     void lifecycleAndValidation() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             engine.register(probe().definition());
@@ -102,7 +103,7 @@ class ScheduleTest {
 
     @Test @DisplayName("a cron schedule arms at the expression's next UTC match and re-arms by cron on fire")
     void cronSchedule() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             engine.register(probe().definition());
@@ -117,7 +118,7 @@ class ScheduleTest {
 
             // Backdate the fire time through the CAS (the only mutator) to force it due.
             long past = System.currentTimeMillis() - 10;
-            boolean backdated = storage.inTx(tx -> tx.claimSchedule(id, sched.nextFireAt, past));
+            boolean backdated = TestTx.inHome(storage, () -> Repositories.schedules().claimSchedule(id, sched.nextFireAt, past));
             assertTrue(backdated);
             assertEquals(1, engine.fireDueSchedules(10), "fires once due");
             assertEquals(1, engine.list("sched-probe", null, 10).size());

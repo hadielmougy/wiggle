@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -28,7 +29,7 @@ class HealthzTest {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, port);
 
-        try (WiggleServer server = new WiggleServer(config).start()) {
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
             HttpResponse<String> r = HttpClient.newHttpClient().send(
                     HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/healthz")).GET().build(),
                     HttpResponse.BodyHandlers.ofString());

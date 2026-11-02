@@ -12,6 +12,7 @@ import com.wiggle.core.EventView;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RetryPolicy;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -109,7 +110,7 @@ class EmittedEventTest {
         for (ExecutionMode mode : List.of(ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
             FlowSpec spec = FlowSpec.define("emit-flow", 1, Map.class, Steps.class,
                     (f, s) -> Modes.in(f, mode).thenApply(s::charge).thenApply(s::ship));
-            try (WiggleServer server = new WiggleServer(config()).start();
+            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker worker = new Worker(client, "w-emit", WorkerOptions.defaults()).registerHandler(new H())) {
                 client.register(spec);
@@ -135,7 +136,7 @@ class EmittedEventTest {
 
     @Test @DisplayName("an attempt that throws leaves nothing behind, and its retry emits fresh")
     void onlyWhatCompleted() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-emit-fail", WorkerOptions.defaults())
                      .registerHandler(new Thrower()).registerHandler(new Retrier())) {
@@ -170,7 +171,7 @@ class EmittedEventTest {
         assertTrue(reserved.getMessage().contains("reserved"), reserved.getMessage());
         assertThrows(IllegalArgumentException.class, () -> new EmittedEvent("  ", Map.of()));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-emit-bad", WorkerOptions.defaults())
                      .registerHandler(new BadPayload()).registerHandler(new Reserved())) {

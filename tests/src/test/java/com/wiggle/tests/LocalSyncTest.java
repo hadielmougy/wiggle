@@ -6,13 +6,13 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.engine.ReportOutcome;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
@@ -80,7 +80,7 @@ class LocalSyncTest {
                 ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             AtomicInteger runs = new AtomicInteger();
             FlowSpec bp = linear(mode);
-            try (WiggleServer server = new WiggleServer(config()).start();
+            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
                          WorkerOptions.defaults().withConcurrency(4)).registerHandler(new LinearH(runs))) {
@@ -100,7 +100,7 @@ class LocalSyncTest {
 
     @Test @DisplayName("a chained continuation is leased to the same worker, not offered to others")
     void continuationStaysOnTheWorker() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -131,7 +131,7 @@ class LocalSyncTest {
 
     @Test @DisplayName("an empty report is rejected, not acked with a lease that was never written")
     void emptyBatchIsRejected() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -149,7 +149,7 @@ class LocalSyncTest {
 
     @Test @DisplayName("LOCAL_ASYNC: a whole run is applied atomically in one report")
     void batchAppliesAtomically() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -189,7 +189,7 @@ class LocalSyncTest {
     @Test @DisplayName("every local mode advances a single step reported on its own")
     void singleStepAdvancesUnderLocalModes() {
         for (ExecutionMode mode : List.of(ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
-            try (Storage storage = new InMemoryStorage()) {
+            try (Storage storage = PostgresStorageFactory.inMemory()) {
                 storage.migrate();
                 DefinitionRegistry registry = new DefinitionRegistry(storage);
                 WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);

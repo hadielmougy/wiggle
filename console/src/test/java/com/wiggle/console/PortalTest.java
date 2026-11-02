@@ -1,6 +1,7 @@
 package com.wiggle.console;
 
 import com.wiggle.core.Tls;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.ServerConfig;
@@ -37,7 +38,7 @@ class PortalTest {
     void onByDefault() throws Exception {
         assertEquals(8070, Portal.port(Map.of()));
         assertEquals(9000, Portal.port(Map.of(Portal.PORT_ENV, "9000")));
-        try (WiggleServer server = new WiggleServer(config()).start()) {
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start()) {
             assertTrue(Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(Portal.PORT_ENV, "0")).isEmpty());
             assertThrows(IllegalArgumentException.class,
                     () -> Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(Portal.PORT_ENV, "web")));
@@ -52,7 +53,7 @@ class PortalTest {
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             port = s.getLocalPort();
         }
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              Portal portal = Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(
                      Portal.PORT_ENV, String.valueOf(port),
                      "WIGGLE_DASHBOARD_PASSWORD", "s3cret",

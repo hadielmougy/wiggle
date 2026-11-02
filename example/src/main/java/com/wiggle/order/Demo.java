@@ -4,6 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
@@ -24,7 +25,7 @@ public final class Demo {
                 Duration.ofMillis(200), Duration.ofSeconds(2), 3, Duration.ofSeconds(30),
                 Duration.ofSeconds(2), Duration.ofHours(1), 100, 0);
 
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec flowSpec = OrderFulfilment.flowSpec();

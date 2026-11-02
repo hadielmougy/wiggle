@@ -6,6 +6,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -83,7 +84,7 @@ class SubFlowTest {
                 .thenApply(s::childWork)
                 .thenApply(s::childDone));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w")
                      .registerHandler(new ParentH()).registerHandler(new ChildOkH())) {
@@ -106,7 +107,7 @@ class SubFlowTest {
         FlowSpec child = FlowSpec.define("sub-child", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::childWork, com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1))));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w2")
                      .registerHandler(new ParentH()).registerHandler(new ChildFailH())) {
@@ -122,7 +123,7 @@ class SubFlowTest {
 
     @Test @DisplayName("an unregistered child workflow fails the parent immediately")
     void unregisteredChildFailsParent() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w3").registerHandler(new ParentH())) {
             client.register(parent());   // the child is deliberately NOT registered
@@ -139,7 +140,7 @@ class SubFlowTest {
                 .thenAwait("never-arrives")   // the child parks so it is definitely still running
                 .thenApply(s::childDone));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sub-w4")
                      .registerHandler(new ParentH()).registerHandler(new ChildParkH())) {

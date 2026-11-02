@@ -25,7 +25,7 @@ import java.util.Map;
  * </ul>
  *
  * <p>Immutable, and shared freely: {@link Rows.Token#clone()} is shallow, so a mutable payload would
- * alias across stored copies in the in-memory store. Every {@code with}/{@code push} returns a new
+ * alias across copies. Every {@code with}/{@code push} returns a new
  * value. Frame views are treated as immutable too -- they are replaced, never edited in place.
  */
 public record TokenPayload(List<Frame> scopes, Map<String, Long> loopCounts, Map<String, Object> staged) {

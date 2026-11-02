@@ -26,8 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The ceiling question from docs' cross-instance batching plan: with N runs in one call, what does
  * the report path actually gain over N single calls? Timed against a real PostgreSQL, because the
- * lever under test is transactions and commits -- an in-memory store would measure map lookups and
- * say nothing.
+ * lever under test is transactions and commits -- H2 in memory would say nothing.
  *
  * <p>What is measured is the report phase alone -- starts and polls happen off the clock -- on one
  * thread, so the comparison isolates per-call cost: batch size 1 is exactly today's

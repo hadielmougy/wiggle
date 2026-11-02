@@ -27,7 +27,7 @@ import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.wiggle.server.store.WriteBuffer;
 
 import javax.sql.DataSource;
@@ -64,7 +64,7 @@ public final class JdbcStorage implements Storage {
     /** Statements on the connection of the transaction open on the calling thread. */
     private final NamedParameterJdbcTemplate named;
     /** The store's operations; each runs on the connection of the transaction open on the calling thread. */
-    private final JdbcTx tx;
+    private final JdbcRepositories repositories;
     private final String fingerprint;
     private final boolean readOnly;
     private final List<StatementListener> listeners = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -125,7 +125,7 @@ public final class JdbcStorage implements Storage {
         JdbcTemplate template = new JdbcTemplate(observed);
         template.setExceptionTranslator(new SQLStateSQLExceptionTranslator());
         this.named = new NamedParameterJdbcTemplate(template);
-        this.tx = new JdbcTx(dialect, this);
+        this.repositories = new JdbcRepositories(dialect, this);
     }
 
     /** The HikariCP pool a URL-configured store runs on. */
@@ -136,7 +136,7 @@ public final class JdbcStorage implements Storage {
         if (user != null) cfg.setUsername(user);
         if (password != null) cfg.setPassword(password);
         cfg.setMaximumPoolSize(Math.max(1, poolSize));
-        // Every transaction is bounded by inTx(); a borrowed connection stays in manual-commit,
+        // Every transaction is bounded by inShard(); a borrowed connection stays in manual-commit,
         // read-committed mode.
         cfg.setAutoCommit(false);
         cfg.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
@@ -405,8 +405,8 @@ public final class JdbcStorage implements Storage {
             // join_stack is one group id (a token id, plus "#width" for a dynamic fan-out) per
             // enclosing fork/forEach, comma-separated -- so its length is proportional to NESTING
             // DEPTH, and VARCHAR(1000) capped nesting at roughly 38 levels with a raw
-            // "value too long" from the driver. Nothing else bounds depth: the in-memory store
-            // holds a plain String, which is why only JDBC deployments hit it. TEXT, like the
+            // "value too long" from the driver. Nothing else bounded depth: the in-memory store
+            // held a plain String, which is why only JDBC deployments hit it. TEXT, like the
             // other unbounded columns (payload, context, error).
             new Migration(10, "unbounded-join-stack", """
             ALTER TABLE wf_token ALTER COLUMN join_stack TYPE TEXT;
@@ -503,7 +503,7 @@ public final class JdbcStorage implements Storage {
             // wf_instance.status was VARCHAR(16), and COMPENSATION_FAILED is nineteen characters:
             // the one status a saga reaches when a compensator runs out of retries could not be
             // written at all, so the update rolled back and the instance stayed COMPENSATING with
-            // its undo retrying forever. Only JDBC deployments hit it -- the in-memory store holds
+            // its undo retrying forever. Only JDBC deployments hit it -- the in-memory store held
             // the enum, which is why every test passed. 32 leaves room for a longer status later.
             new Migration(18, "instance-status-width", """
             ALTER TABLE wf_instance ALTER COLUMN status TYPE VARCHAR(32);
@@ -947,22 +947,6 @@ public final class JdbcStorage implements Storage {
     }
 
     /**
-     * Runs {@code work} in one transaction, replaying it on a momentary database failure.
-     *
-     * <p>A replay is only ever offered where the attempt provably applied nothing: the failure came
-     * out of a statement, the transaction rolled back, and the dialect calls that failure transient
-     * (connection loss, a pool timeout, a deadlock victim, a serialization failure). Those replays
-     * are what make a database blip invisible to a caller instead of a failed workflow step. A failed
-     * <em>commit</em> is never replayed -- the work may be durable -- and nothing else is either. An
-     * unreachable database is not replayed either: the attempt already waited out the pool timeout.
-     *
-     * <p>{@code work} must therefore be re-runnable against a fresh {@link Tx}: it may read, write
-     * and throw, but it must not depend on in-process state it mutated on the previous attempt. Every
-     * engine body satisfies this by construction, since each one re-reads the rows it works from.
-     * {@code wiggle.jdbc.txAttempts} / {@code WIGGLE_JDBC_TX_ATTEMPTS} bounds the replays (read once
-     * per store, at construction); 1 turns them off.
-     */
-    /**
      * The plan PostgreSQL chooses for a claim of up to {@code max} tasks matching {@code filter} at
      * {@code now}, as {@code EXPLAIN} prints it, one line per plan line. Nothing is claimed. Only for
      * a dialect that claims in one statement.
@@ -971,13 +955,30 @@ public final class JdbcStorage implements Storage {
         if (!dialect.supportsSkipLocked() || !dialect.supportsReturning()) {
             throw new UnsupportedOperationException(dialect.id() + " claims by compare-and-set, not in one statement");
         }
-        return attemptTx(tx -> ((JdbcTx) tx).explainClaim(filter, max, now));
+        return attempt(r -> r.tokens().explainClaim(filter, max, now));
     }
 
-    @Override public <R> R inTx(Function<Tx, R> work) {
+    /**
+     * Runs {@code body} in one transaction, replaying it on a momentary database failure. This store
+     * is one database, so {@code shard} only names it.
+     *
+     * <p>A replay is only ever offered where the attempt provably applied nothing: the failure came
+     * out of a statement, the transaction rolled back, and the dialect calls that failure transient
+     * (connection loss, a pool timeout, a deadlock victim, a serialization failure). Those replays
+     * are what make a database blip invisible to a caller instead of a failed workflow step. A failed
+     * <em>commit</em> is never replayed -- the work may be durable -- and nothing else is either. An
+     * unreachable database is not replayed either: the attempt already waited out the pool timeout.
+     *
+     * <p>{@code body} must therefore be re-runnable in a fresh transaction: it may read, write and
+     * throw, but it must not depend on in-process state it mutated on the previous attempt. Every
+     * engine body satisfies this by construction, since each one re-reads the rows it works from.
+     * {@code wiggle.jdbc.txAttempts} / {@code WIGGLE_JDBC_TX_ATTEMPTS} bounds the replays (read once
+     * per store, at construction); 1 turns them off.
+     */
+    @Override public <R> R inShard(int shard, Function<WriteRepositories, R> body) {
         for (int attempt = 1; ; attempt++) {
             try {
-                return attemptTx(work);
+                return attempt(body::apply);
             } catch (StorageException e) {
                 if (!e.repeatable() || e instanceof StorageUnreachableException || attempt >= txAttempts) throw e;
                 int a = attempt;
@@ -992,14 +993,14 @@ public final class JdbcStorage implements Storage {
      * One attempt, in a transaction of its own on a connection of its own. Spring owns the commit
      * boundary, and the repositories work on the connection it bound to the thread.
      */
-    private <R> R attemptTx(Function<Tx, R> work) {
+    private <R> R attempt(Function<JdbcRepositories, R> body) {
         try {
-            return transactions.execute(status -> work.apply(tx));
+            return transactions.execute(status -> body.apply(repositories));
         } catch (CannotCreateTransactionException e) {
             throw connectionFailure(e);
         } catch (TransactionSystemException e) {
             // The rollback after a failed body failed too: the body's failure is the one to report.
-            if (e.getApplicationException() instanceof RuntimeException body) throw labelled(body);
+            if (e.getApplicationException() instanceof RuntimeException failure) throw labelled(failure);
             // The commit failed, and its outcome is unknown: the work may already be durable.
             throw new StorageException("commit failed", e, Classification.AMBIGUOUS);
         } catch (RuntimeException e) {
@@ -1037,7 +1038,7 @@ public final class JdbcStorage implements Storage {
     /** Refuses to go on unless a transaction is open on this store on the calling thread. */
     void requireTransaction() {
         if (!TransactionSynchronizationManager.hasResource(observed)) {
-            throw new IllegalStateException("no transaction is open on this store; run the call inside inTx");
+            throw new IllegalStateException("no transaction is open on this store; open one through ShardTransactions");
         }
     }
 
@@ -1078,7 +1079,7 @@ public final class JdbcStorage implements Storage {
         if (scope.buffer == null || scope.flushing || scope.buffer.isEmpty()) return;
         scope.flushing = true;
         try {
-            scope.buffer.flushTo(tx.tokens(), tx.instances());
+            scope.buffer.flushTo(repositories.tokens(), repositories.instances());
         } finally {
             scope.flushing = false;
         }
@@ -1212,255 +1213,5 @@ public final class JdbcStorage implements Storage {
     static Rows.EventCursor readCursor(ResultSet rs) throws SQLException {
         return new Rows.EventCursor(rs.getString("consumer"), rs.getLong("acked_seq"),
                 rs.getLong("last_seen"), rs.getLong("created_at"));
-    }
-
-    
-
-    /**
-     * {@link Tx} over the store's repositories, one per area, until the engine calls them directly.
-     * Every operation runs on the connection of the transaction open on the calling thread.
-     */
-    private static final class JdbcTx implements Tx {
-        private final Dialect dialect;
-        private final JdbcStorage owner;
-        private final JdbcShardRepository shards;
-        private final JdbcClusterRepository cluster;
-        private final JdbcScheduleRepository schedules;
-        private final JdbcAuthRepository auth;
-        private final JdbcSearchRepository search;
-        private final JdbcCompensationRepository compensation;
-        private final JdbcDynamicNodeRepository dynamicNodes;
-        private final JdbcEventRepository events;
-        private final JdbcGraphRepository graph;
-        private final JdbcInstanceRepository instances;
-        private final JdbcTokenRepository tokens;
-
-        JdbcTx(Dialect dialect, JdbcStorage owner) {
-            this.dialect = dialect;
-            this.owner = owner;
-            this.shards = new JdbcShardRepository(owner);
-            this.cluster = new JdbcClusterRepository(owner);
-            this.schedules = new JdbcScheduleRepository(owner);
-            this.auth = new JdbcAuthRepository(owner);
-            this.search = new JdbcSearchRepository(owner);
-            this.compensation = new JdbcCompensationRepository(owner);
-            this.dynamicNodes = new JdbcDynamicNodeRepository(owner);
-            this.events = new JdbcEventRepository(owner);
-            this.graph = new JdbcGraphRepository(owner);
-            this.instances = new JdbcInstanceRepository(owner);
-            this.tokens = new JdbcTokenRepository(owner);
-        }
-
-        @Override public void insertToken(Token t) { tokens.insertToken(t); }
-        @Override public void insertTokens(List<Token> tokens) { this.tokens.insertTokens(tokens); }
-        @Override public Optional<Token> findToken(String id) { return tokens.findToken(id); }
-        @Override public List<Token> findTokens(List<String> ids) { return tokens.findTokens(ids); }
-        @Override public List<Token> tokensOf(String instanceId) { return tokens.tokensOf(instanceId); }
-        @Override public boolean hasActiveTokens(String instanceId) { return tokens.hasActiveTokens(instanceId); }
-        @Override public void updateToken(Token t) { tokens.updateToken(t); }
-        @Override public void updateTokens(List<Token> tokens) { this.tokens.updateTokens(tokens); }
-        @Override public boolean renewLease(String taskId, String leaseOwner, long until, long now) {
-            return tokens.renewLease(taskId, leaseOwner, until, now);
-        }
-        @Override public List<String> joinStacksAt(String instanceId, String nodeId) {
-            return tokens.joinStacksAt(instanceId, nodeId);
-        }
-        @Override public List<Token> joinedAt(String instanceId, String nodeId) {
-            return tokens.joinedAt(instanceId, nodeId);
-        }
-        @Override public Optional<Token> awaitingSignal(String instanceId, String name) {
-            return tokens.awaitingSignal(instanceId, name);
-        }
-        @Override public List<Token> claimTasks(String workerId, ClaimFilter filter, int max, long now,
-                                                long leaseUntil) {
-            return tokens.claimTasks(workerId, filter, max, now, leaseUntil);
-        }
-        @Override public List<Token> dueRetries(long now, int max) { return tokens.dueRetries(now, max); }
-        @Override public List<Token> dueTimers(long now, int max) { return tokens.dueTimers(now, max); }
-        @Override public List<Token> expiredLeases(long now, int max) { return tokens.expiredLeases(now, max); }
-        @Override public List<Token> pendingSignals(int max) { return tokens.pendingSignals(max); }
-        @Override public List<Token> dueSignals(long now, int max) { return tokens.dueSignals(now, max); }
-        @Override public Rows.QueueDepth queueDepth(long now) { return tokens.queueDepth(now); }
-        @Override public int countReady(String workflow, int version, String queue,
-                                        com.wiggle.core.criteria.Predicate where, long now, int cap) {
-            return tokens.countReady(workflow, version, queue, where, now, cap);
-        }
-        @Override public List<Rows.BacklogSlice> backlogByVersion(long now, int max) {
-            return tokens.backlogByVersion(now, max);
-        }
-        @Override public List<Rows.StepDuration> stepDurations(String workflow, int version, long since, int max) {
-            return tokens.stepDurations(workflow, version, since, max);
-        }
-        @Override public void cancelActiveTokens(String instanceId, long now) {
-            tokens.cancelActiveTokens(instanceId, now);
-        }
-        String explainClaim(ClaimFilter filter, int max, long now) { return tokens.explainClaim(filter, max, now); }
-
-        @Override public void insertInstance(Instance i) { instances.insertInstance(i); }
-        @Override public Optional<Instance> lockInstance(String id) { return instances.lockInstance(id); }
-        @Override public Optional<Instance> findInstance(String id) { return instances.findInstance(id); }
-        @Override public Optional<Instance> lockInstanceOf(String tokenId) { return instances.lockInstanceOf(tokenId); }
-        @Override public void updateInstance(Instance i) { instances.updateInstance(i); }
-        @Override public List<Instance> lockInstances(List<String> ids) { return instances.lockInstances(ids); }
-        @Override public void updateInstances(List<Instance> instances) { this.instances.updateInstances(instances); }
-        @Override public List<Instance> findByCorrelation(String correlationId, int limit) {
-            return instances.findByCorrelation(correlationId, limit);
-        }
-        @Override public List<Instance> listInstances(String workflow, InstanceStatus status, int limit) {
-            return instances.listInstances(workflow, status, limit);
-        }
-        @Override public int countInstances(InstanceStatus status) { return instances.countInstances(status); }
-        @Override public int deleteTerminalInstancesBefore(long updatedBefore, int limit) {
-            return instances.deleteTerminalInstancesBefore(updatedBefore, limit);
-        }
-        @Override public List<String> childInstanceIds(String parentInstanceId) {
-            return instances.childInstanceIds(parentInstanceId);
-        }
-
-        @Override public void putDefinition(String name, int version, String json,
-                                            String fingerprint, String fingerprintAlgo) {
-            graph.putDefinition(name, version, json, fingerprint, fingerprintAlgo);
-        }
-        @Override public void replaceDefinition(String name, int version, String json,
-                                                String fingerprint, String fingerprintAlgo) {
-            graph.replaceDefinition(name, version, json, fingerprint, fingerprintAlgo);
-        }
-        @Override public Optional<StoredFingerprint> definitionFingerprint(String name, int version) {
-            return graph.definitionFingerprint(name, version);
-        }
-        @Override public void putGraph(WorkflowDefinition def) { graph.putGraph(def); }
-        @Override public void deleteGraph(String workflow, int version) { graph.deleteGraph(workflow, version); }
-        @Override public Optional<Node> graphNode(String workflow, int version, String nodeId) {
-            return graph.graphNode(workflow, version, nodeId);
-        }
-        @Override public Optional<String> graphStartNode(String workflow, int version) {
-            return graph.graphStartNode(workflow, version);
-        }
-        @Override public int graphNodeCount(String workflow, int version) {
-            return graph.graphNodeCount(workflow, version);
-        }
-        @Override public Optional<String> definition(String name, int version) {
-            return graph.definition(name, version);
-        }
-        @Override public Optional<Integer> latestVersion(String name) { return graph.latestVersion(name); }
-        @Override public List<String> definitionNames() { return graph.definitionNames(); }
-        @Override public List<Integer> definitionVersions(String name) { return graph.definitionVersions(name); }
-
-        @Override public void advanceEventPosition(String consumer, int shard, long ackedSeq) {
-            events.advanceEventPosition(consumer, shard, ackedSeq);
-        }
-        @Override public long appendEvent(Rows.Event e) { return events.appendEvent(e); }
-        @Override public void createEventCursorIfAbsent(Rows.EventCursor cursor) {
-            events.createEventCursorIfAbsent(cursor);
-        }
-        @Override public void advanceEventCursor(String consumer, long ackedSeq, long now) {
-            events.advanceEventCursor(consumer, ackedSeq, now);
-        }
-        @Override public int deleteEvents(long createdBefore, Long upToSeq, int max) {
-            return events.deleteEvents(createdBefore, upToSeq, max);
-        }
-        @Override public Map<Integer, Long> eventPositions(String consumer) { return events.eventPositions(consumer); }
-        @Override public Long oldestEventPosition(int shard) { return events.oldestEventPosition(shard); }
-        @Override public List<Rows.Event> eventsAfter(long afterSeq, long createdBefore, int max) {
-            return events.eventsAfter(afterSeq, createdBefore, max);
-        }
-        @Override public long latestEventSeq() { return events.latestEventSeq(); }
-        @Override public Rows.EventCursor eventCursor(String consumer) { return events.eventCursor(consumer); }
-        @Override public Long oldestAckedSeq() { return events.oldestAckedSeq(); }
-
-        @Override public void insertDynNodes(String instanceId, java.util.List<Node> nodes) {
-            dynamicNodes.insertDynNodes(instanceId, nodes);
-        }
-        @Override public Optional<Node> dynNode(String nodeId) { return dynamicNodes.dynNode(nodeId); }
-        @Override public long dynNodeCount(String instanceId) { return dynamicNodes.dynNodeCount(instanceId); }
-
-        @Override public void appendCompensation(Rows.CompLog e) { compensation.appendCompensation(e); }
-        @Override public void markCompensated(String instanceId, long seq) {
-            compensation.markCompensated(instanceId, seq);
-        }
-        @Override public java.util.List<Rows.CompLog> compensationLog(String instanceId) {
-            return compensation.compensationLog(instanceId);
-        }
-
-        @Override public boolean upsertSearchDoc(Rows.SearchDoc d) { return search.upsertSearchDoc(d); }
-        @Override public void deleteSearchDoc(String instanceId) { search.deleteSearchDoc(instanceId); }
-        @Override public int deleteSearchDocsBefore(long updatedBefore, int max) {
-            return search.deleteSearchDocsBefore(updatedBefore, max);
-        }
-        @Override public List<Rows.SearchDoc> searchDocsAfter(String afterId, int max) {
-            return search.searchDocsAfter(afterId, max);
-        }
-        @Override public List<Rows.SearchHit> searchDocs(Rows.SearchQuery q) { return search.searchDocs(q); }
-
-        @Override public Optional<Rows.AuthUser> findAuthUser(String name) { return auth.findAuthUser(name); }
-        @Override public List<Rows.AuthUser> authUsers() { return auth.authUsers(); }
-        @Override public List<String> authRolesOf(String user) { return auth.authRolesOf(user); }
-        @Override public List<Rows.AuthRole> authRoles() { return auth.authRoles(); }
-        @Override public Optional<Rows.AuthSession> findAuthSession(String idHash) {
-            return auth.findAuthSession(idHash);
-        }
-        @Override public List<Rows.AuthAudit> authAuditAfter(long afterSeq, int max) {
-            return auth.authAuditAfter(afterSeq, max);
-        }
-        @Override public long authAuditHead() { return auth.authAuditHead(); }
-        @Override public boolean authAuditHas(String action) { return auth.authAuditHas(action); }
-        @Override public void putAuthUser(Rows.AuthUser u) { auth.putAuthUser(u); }
-        @Override public boolean deleteAuthUser(String name) { return auth.deleteAuthUser(name); }
-        @Override public void setAuthRolesOf(String user, List<String> roles) { auth.setAuthRolesOf(user, roles); }
-        @Override public void putAuthRole(Rows.AuthRole r) { auth.putAuthRole(r); }
-        @Override public boolean deleteAuthRole(String name) { return auth.deleteAuthRole(name); }
-        @Override public List<Rows.AuthCredential> authCredentials() { return auth.authCredentials(); }
-        @Override public Optional<Rows.AuthCredential> findAuthCredentialByKeyHash(String keyHash) {
-            return auth.findAuthCredentialByKeyHash(keyHash);
-        }
-        @Override public Optional<Rows.AuthCredential> findAuthCredentialBySubject(String subject) {
-            return auth.findAuthCredentialBySubject(subject);
-        }
-        @Override public void insertAuthCredential(Rows.AuthCredential c) { auth.insertAuthCredential(c); }
-        @Override public boolean deleteAuthCredential(String id) { return auth.deleteAuthCredential(id); }
-        @Override public void insertAuthSession(Rows.AuthSession x) { auth.insertAuthSession(x); }
-        @Override public void deleteAuthSession(String idHash) { auth.deleteAuthSession(idHash); }
-        @Override public int deleteAuthSessionsOf(String user, String keepIdHash) {
-            return auth.deleteAuthSessionsOf(user, keepIdHash);
-        }
-        @Override public int deleteExpiredAuthSessions(long now, int max) {
-            return auth.deleteExpiredAuthSessions(now, max);
-        }
-        @Override public long appendAuthAudit(Rows.AuthAudit e) { return auth.appendAuthAudit(e); }
-
-        @Override public void putSchedule(Rows.Schedule s) { schedules.putSchedule(s); }
-        @Override public void deleteSchedule(String id) { schedules.deleteSchedule(id); }
-        @Override public List<Rows.Schedule> dueSchedules(long now, int max) {
-            return schedules.dueSchedules(now, max);
-        }
-        @Override public boolean claimSchedule(String id, long expectedFireAt, long nextFireAt) {
-            return schedules.claimSchedule(id, expectedFireAt, nextFireAt);
-        }
-        @Override public List<Rows.Schedule> schedules() { return schedules.schedules(); }
-        @Override public java.util.Optional<Rows.Schedule> scheduleByWorkflow(String workflow) {
-            return schedules.scheduleByWorkflow(workflow);
-        }
-
-        @Override public void upsertNode(ServerNode n) { cluster.upsertNode(n); }
-        @Override public void deleteNodesOlderThan(long before) { cluster.deleteNodesOlderThan(before); }
-        @Override public void setLeader(String nodeId, boolean leader) { cluster.setLeader(nodeId, leader); }
-        @Override public List<ServerNode> nodes() { return cluster.nodes(); }
-
-        @Override public void claimShardIdentity(int shardId) { shards.claimShardIdentity(shardId); }
-        @Override public void writeShardBeat(long now) { shards.writeShardBeat(now); }
-        @Override public void putShardRecord(Rows.ShardRecord r) { shards.putShardRecord(r); }
-        @Override public OptionalInt shardIdentity() { return shards.shardIdentity(); }
-        @Override public OptionalLong shardBeat() { return shards.shardBeat(); }
-        @Override public List<Rows.ShardRecord> shardRegistry() { return shards.shardRegistry(); }
-
-        @Override public void bufferWrites() { owner.bufferWrites(); }
-
-        JdbcTokenRepository tokens() { return tokens; }
-
-        JdbcInstanceRepository instances() { return instances; }
-
-        @Override public Optional<Rows.LockedTask> lockTask(String tokenId) {
-            return dialect.supportsJoinedLock() ? instances.lockTask(tokenId) : Tx.super.lockTask(tokenId);
-        }
     }
 }

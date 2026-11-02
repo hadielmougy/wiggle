@@ -20,6 +20,7 @@ import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Schedule;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.server.store.Rows.Token;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -40,6 +41,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -54,7 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * do fails here, by name, rather than silently in production.
  *
  * <p>It exists because each backend used to be tested by its own tests -- {@code GraphStoreTest}
- * against the in-memory store, {@code JdbcGraphTest} against SQL -- and two implementations of one
+ * against a store kept in memory, {@code JdbcGraphTest} against SQL -- and two implementations of one
  * rule is two chances to drift, silently, because each passes its own tests. The spec these
  * assertions follow is {@code docs/spec/80-storage.md}.
  *
@@ -122,15 +124,15 @@ abstract class StorageContract {
         return n == null ? 0 : ((Number) n).intValue();
     }
 
-    /** {@code inTx} with its answer's type fixed. The assertion overloads take a
+    /** {@link TestTx#inHome} with its answer's type fixed. The assertion overloads take a
      *  {@code BooleanSupplier} and a {@code long}, so a transaction returning a primitive has to
      *  land in a typed slot before it reaches one. */
-    private boolean inTxBoolean(Function<Tx, Boolean> work) {
-        return storage.inTx(work);
+    private boolean inHomeBoolean(Supplier<Boolean> work) {
+        return TestTx.inHome(storage, work);
     }
 
-    private int inTxInt(Function<Tx, Integer> work) {
-        return storage.inTx(work);
+    private int inHomeInt(Supplier<Integer> work) {
+        return TestTx.inHome(storage, work);
     }
 
     private Instance instance(String workflow) {
@@ -163,9 +165,9 @@ abstract class StorageContract {
 
     /** Persists an instance and its tokens the way the engine does: in one transaction. */
     private void store(Instance i, Token... tokens) {
-        storage.inTxVoid(tx -> {
-            tx.insertInstance(i);
-            for (Token t : tokens) tx.insertToken(t);
+        TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            for (Token t : tokens) Repositories.tokens().insertToken(t);
         });
     }
 
@@ -178,10 +180,10 @@ abstract class StorageContract {
     }
 
     private void register(WorkflowDefinition d) {
-        storage.inTxVoid(tx -> {
-            tx.putDefinition(d.name(), d.version(), Json.write(d.toJson()),
+        TestTx.inHome(storage, () -> {
+            Repositories.graph().putDefinition(d.name(), d.version(), Json.write(d.toJson()),
                     d.fingerprint(), WorkflowDefinition.FINGERPRINT_ALGO);
-            tx.putGraph(d);
+            Repositories.graph().putGraph(d);
         });
     }
 
@@ -214,34 +216,30 @@ abstract class StorageContract {
     // -- WGL-STOR-002/003/084: the transaction is a unit, and an instance can be locked --
 
     @Test
-    @DisplayName("inTx returns the body's value, and its writes are visible to the next transaction")
+    @DisplayName("a transaction returns the body's value, and its writes are visible to the next transaction")
     void transactionsCommitAndReturn() {
         Instance i = instance(id("wf"));
-        String returned = storage.inTx(tx -> {
-            tx.insertInstance(i);
-            return tx.findInstance(i.id).orElseThrow().id;
+        String returned = TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            return Repositories.instances().findInstance(i.id).orElseThrow().id;
         });
         assertEquals(i.id, returned, "a write is visible to the transaction that made it");
-        assertEquals(i.id, storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow().id);
+        assertEquals(i.id, TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow().id);
     }
 
     @Test
-    @DisplayName("a transaction that throws keeps all of its writes or none, held back or not")
+    @DisplayName("a transaction that throws keeps none of its writes, held back or not")
     void bufferingAgreesWithRollback() {
         Instance i = instance(id("wf"));
         Token t = token(i, NodeKind.TASK, TokenStatus.READY, null);
-        assertThrows(IllegalStateException.class, () -> storage.inTxVoid(tx -> {
-            tx.insertInstance(i);
-            tx.bufferWrites();
-            tx.insertToken(t);
+        assertThrows(IllegalStateException.class, () -> TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            Repositories.bufferWrites();
+            Repositories.tokens().insertToken(t);
             throw new IllegalStateException("abandoning this transaction");
         }));
-        boolean instanceKept = storage.inTx(tx -> tx.findInstance(i.id)).isPresent();
-        boolean tokenKept = storage.inTx(tx -> tx.findToken(t.id)).isPresent();
-        // A store that rolls back keeps neither; one that cannot keeps both, so it must not hold the
-        // token back (see Tx#bufferWrites). Losing only the held-back write is a state no execution makes.
-        assertEquals(instanceKept, tokenKept, "the instance was " + (instanceKept ? "" : "not ") + "kept, the token "
-                + (tokenKept ? "was" : "was not"));
+        assertFalse(TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).isPresent(), "the instance rolled back");
+        assertFalse(TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).isPresent(), "the held-back token was never written");
     }
 
     @Test
@@ -255,16 +253,16 @@ abstract class StorageContract {
         int each = 25;
         race(threads, () -> {
             for (int k = 0; k < each; k++) {
-                storage.inTxVoid(tx -> {
-                    Instance live = tx.lockInstance(seed.id).orElseThrow();
+                TestTx.inHome(storage, () -> {
+                    Instance live = Repositories.instances().lockInstance(seed.id).orElseThrow();
                     live.context = doc("n", counter(live.context) + 1);
                     live.updatedAt = System.currentTimeMillis();
-                    tx.updateInstance(live);
+                    Repositories.instances().updateInstance(live);
                 });
             }
         });
 
-        Instance done = storage.inTx(tx -> tx.findInstance(seed.id)).orElseThrow();
+        Instance done = TestTx.inHome(storage, () -> Repositories.instances().findInstance(seed.id)).orElseThrow();
         assertEquals(threads * each, counter(done.context),
                 "every increment taken under the instance lock survived: no read-modify-write was lost");
         assertTrue(done.revision >= (long) threads * each, "and each one advanced the revision");
@@ -282,11 +280,11 @@ abstract class StorageContract {
 
         List<String> asked = new ArrayList<>(List.of(a.id, b.id, missing));
         asked.sort(null);                                  // the contract takes ids already ascending
-        List<Instance> locked = storage.inTx(tx -> tx.lockInstances(asked));
+        List<Instance> locked = TestTx.inHome(storage, () -> Repositories.instances().lockInstances(asked));
 
         assertEquals(Set.of(a.id, b.id), Set.copyOf(locked.stream().map(i -> i.id).toList()),
                 "both rows that exist come back, the one that does not is absent");
-        assertTrue(storage.inTx(tx -> tx.lockInstances(List.of())).isEmpty(), "no ids, no rows");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().lockInstances(List.of())).isEmpty(), "no ids, no rows");
     }
 
     @Test
@@ -297,11 +295,11 @@ abstract class StorageContract {
         store(owner, task);
         Instance gone = instance(id("wf"));
         Token orphan = token(gone, NodeKind.TASK, TokenStatus.RUNNING, "q");
-        storage.inTxVoid(tx -> tx.insertToken(orphan));
+        TestTx.inHome(storage, () -> Repositories.tokens().insertToken(orphan));
 
-        assertEquals(owner.id, storage.inTx(tx -> tx.lockInstanceOf(task.id)).orElseThrow().id);
-        assertTrue(storage.inTx(tx -> tx.lockInstanceOf(id("tok"))).isEmpty(), "no such token");
-        assertTrue(storage.inTx(tx -> tx.lockInstanceOf(orphan.id)).isEmpty(), "a token whose instance is gone");
+        assertEquals(owner.id, TestTx.inHome(storage, () -> Repositories.locks().lockInstanceOf(task.id)).orElseThrow().id);
+        assertTrue(TestTx.inHome(storage, () -> Repositories.locks().lockInstanceOf(id("tok"))).isEmpty(), "no such token");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.locks().lockInstanceOf(orphan.id)).isEmpty(), "a token whose instance is gone");
     }
 
     @Test
@@ -312,15 +310,15 @@ abstract class StorageContract {
         store(owner, task);
         Instance gone = instance(id("wf"));
         Token orphan = token(gone, NodeKind.TASK, TokenStatus.RUNNING, "q");
-        storage.inTxVoid(tx -> tx.insertToken(orphan));
+        TestTx.inHome(storage, () -> Repositories.tokens().insertToken(orphan));
 
-        Rows.LockedTask locked = storage.inTx(tx -> tx.lockTask(task.id)).orElseThrow();
+        Rows.LockedTask locked = TestTx.inHome(storage, () -> Repositories.locks().lockTask(task.id)).orElseThrow();
         assertEquals(owner.id, locked.inst().id);
         assertEquals(owner.revision, locked.inst().revision);
         assertEquals(task.id, locked.token().id);
         assertEquals(TokenStatus.RUNNING, locked.token().status);
-        assertTrue(storage.inTx(tx -> tx.lockTask(id("tok"))).isEmpty(), "no such token");
-        assertTrue(storage.inTx(tx -> tx.lockTask(orphan.id)).isEmpty(), "a token whose instance is gone");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.locks().lockTask(id("tok"))).isEmpty(), "no such token");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.locks().lockTask(orphan.id)).isEmpty(), "a token whose instance is gone");
     }
 
     @Test
@@ -335,16 +333,16 @@ abstract class StorageContract {
         int each = 25;
         race(threads, () -> {
             for (int k = 0; k < each; k++) {
-                storage.inTxVoid(tx -> {
-                    Instance live = tx.lockInstanceOf(task.id).orElseThrow();
+                TestTx.inHome(storage, () -> {
+                    Instance live = Repositories.locks().lockInstanceOf(task.id).orElseThrow();
                     live.context = doc("n", counter(live.context) + 1);
                     live.updatedAt = System.currentTimeMillis();
-                    tx.updateInstance(live);
+                    Repositories.instances().updateInstance(live);
                 });
             }
         });
 
-        Instance done = storage.inTx(tx -> tx.findInstance(seed.id)).orElseThrow();
+        Instance done = TestTx.inHome(storage, () -> Repositories.instances().findInstance(seed.id)).orElseThrow();
         assertEquals(threads * each, counter(done.context), "no increment taken under the lock was lost");
     }
 
@@ -362,9 +360,9 @@ abstract class StorageContract {
         store(inst, a, b, elsewhere, settled);
         store(other, foreign);
 
-        assertEquals(List.of(a.id, b.id), idsOf(storage.inTx(tx -> tx.joinedAt(inst.id, "n1"))));
-        assertEquals(List.of(elsewhere.id), idsOf(storage.inTx(tx -> tx.joinedAt(inst.id, "n2"))));
-        assertTrue(storage.inTx(tx -> tx.joinedAt(inst.id, "n3")).isEmpty());
+        assertEquals(List.of(a.id, b.id), idsOf(TestTx.inHome(storage, () -> Repositories.tokens().joinedAt(inst.id, "n1"))));
+        assertEquals(List.of(elsewhere.id), idsOf(TestTx.inHome(storage, () -> Repositories.tokens().joinedAt(inst.id, "n2"))));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().joinedAt(inst.id, "n3")).isEmpty());
     }
 
     @Test
@@ -379,10 +377,10 @@ abstract class StorageContract {
         delivered.activity = "ship";
         store(inst, approve, reject, delivered);
 
-        assertEquals(approve.id, storage.inTx(tx -> tx.awaitingSignal(inst.id, "approve")).orElseThrow().id);
-        assertEquals(reject.id, storage.inTx(tx -> tx.awaitingSignal(inst.id, "reject")).orElseThrow().id);
-        assertTrue(storage.inTx(tx -> tx.awaitingSignal(inst.id, "ship")).isEmpty(), "already delivered");
-        assertTrue(storage.inTx(tx -> tx.awaitingSignal(inst.id, "unknown")).isEmpty());
+        assertEquals(approve.id, TestTx.inHome(storage, () -> Repositories.tokens().awaitingSignal(inst.id, "approve")).orElseThrow().id);
+        assertEquals(reject.id, TestTx.inHome(storage, () -> Repositories.tokens().awaitingSignal(inst.id, "reject")).orElseThrow().id);
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().awaitingSignal(inst.id, "ship")).isEmpty(), "already delivered");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().awaitingSignal(inst.id, "unknown")).isEmpty());
     }
 
     // -- WGL-STOR-030/031/032: definitions and their normalised graphs --
@@ -392,24 +390,24 @@ abstract class StorageContract {
     void definitionBlobIsWriteOnceThenReplaceable() {
         WorkflowDefinition d = definition(id("wf"), 1);
         register(d);
-        assertEquals(Json.write(d.toJson()), storage.inTx(tx -> tx.definition(d.name(), 1)).orElseThrow());
+        assertEquals(Json.write(d.toJson()), TestTx.inHome(storage, () -> Repositories.graph().definition(d.name(), 1)).orElseThrow());
 
-        storage.inTxVoid(tx -> tx.putDefinition(d.name(), 1, "{\"other\":true}", "fp2", "algo2"));
-        assertEquals(Json.write(d.toJson()), storage.inTx(tx -> tx.definition(d.name(), 1)).orElseThrow(),
+        TestTx.inHome(storage, () -> Repositories.graph().putDefinition(d.name(), 1, "{\"other\":true}", "fp2", "algo2"));
+        assertEquals(Json.write(d.toJson()), TestTx.inHome(storage, () -> Repositories.graph().definition(d.name(), 1)).orElseThrow(),
                 "putDefinition leaves an existing version alone, so two nodes cannot collide on it");
 
-        storage.inTxVoid(tx -> tx.replaceDefinition(d.name(), 1, "{\"other\":true}", "fp2", "algo2"));
-        assertEquals("{\"other\":true}", storage.inTx(tx -> tx.definition(d.name(), 1)).orElseThrow());
+        TestTx.inHome(storage, () -> Repositories.graph().replaceDefinition(d.name(), 1, "{\"other\":true}", "fp2", "algo2"));
+        assertEquals("{\"other\":true}", TestTx.inHome(storage, () -> Repositories.graph().definition(d.name(), 1)).orElseThrow());
         assertEquals(new GraphStore.StoredFingerprint("fp2", "algo2"),
-                storage.inTx(tx -> tx.definitionFingerprint(d.name(), 1)).orElseThrow());
+                TestTx.inHome(storage, () -> Repositories.graph().definitionFingerprint(d.name(), 1)).orElseThrow());
     }
 
     @Test
     @DisplayName("an unregistered version has no fingerprint at all")
     void fingerprintIsAbsentForAnUnknownVersion() {
-        assertTrue(storage.inTx(tx -> tx.definitionFingerprint(id("wf"), 1)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.definition(id("wf"), 1)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.latestVersion(id("wf"))).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().definitionFingerprint(id("wf"), 1)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().definition(id("wf"), 1)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().latestVersion(id("wf"))).isEmpty());
     }
 
     @Test
@@ -418,9 +416,9 @@ abstract class StorageContract {
         String wf = id("wf");
         register(definition(wf, 2));
         register(definition(wf, 1));
-        assertEquals(2, storage.inTx(tx -> tx.latestVersion(wf)).orElseThrow(),
+        assertEquals(2, TestTx.inHome(storage, () -> Repositories.graph().latestVersion(wf)).orElseThrow(),
                 "versions are author-declared and ordered");
-        assertTrue(storage.inTx(tx -> tx.definitionNames()).contains(wf));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().definitionNames()).contains(wf));
     }
 
     @Test
@@ -429,18 +427,18 @@ abstract class StorageContract {
         WorkflowDefinition d = definition(id("wf"), 1);
         register(d);
 
-        assertEquals("n1", storage.inTx(tx -> tx.graphStartNode(d.name(), 1)).orElseThrow(),
+        assertEquals("n1", TestTx.inHome(storage, () -> Repositories.graph().graphStartNode(d.name(), 1)).orElseThrow(),
                 "the entry node, without loading any other");
-        Node n1 = storage.inTx(tx -> tx.graphNode(d.name(), 1, "n1")).orElseThrow();
+        Node n1 = TestTx.inHome(storage, () -> Repositories.graph().graphNode(d.name(), 1, "n1")).orElseThrow();
         assertEquals(NodeKind.TASK, n1.kind());
         assertEquals(d.name() + "#start", n1.activity());
         assertEquals("end", n1.next(), "a node arrives with its outgoing edges");
-        assertTrue(storage.inTx(tx -> tx.graphNode(d.name(), 1, "nope")).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().graphNode(d.name(), 1, "nope")).isEmpty());
 
-        storage.inTxVoid(tx -> tx.deleteGraph(d.name(), 1));
-        assertTrue(storage.inTx(tx -> tx.graphNode(d.name(), 1, "n1")).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.graphStartNode(d.name(), 1)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.definition(d.name(), 1)).isPresent(),
+        TestTx.inHome(storage, () -> Repositories.graph().deleteGraph(d.name(), 1));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().graphNode(d.name(), 1, "n1")).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().graphStartNode(d.name(), 1)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.graph().definition(d.name(), 1)).isPresent(),
                 "the blob outlives the normalised rows: it is the audit copy");
     }
 
@@ -459,7 +457,7 @@ abstract class StorageContract {
         i.revision = 7;
         store(i);
 
-        Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        Instance back = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
         assertEquals(i.id, back.id);
         assertEquals(i.workflow, back.workflow);
         assertEquals(1, back.version);
@@ -472,7 +470,7 @@ abstract class StorageContract {
         assertEquals(now, back.createdAt);
         assertEquals(now, back.updatedAt);
         assertEquals(7, back.revision);
-        assertTrue(storage.inTx(tx -> tx.findInstance(id("wfi"))).isEmpty(), "an unknown id is absent");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().findInstance(id("wfi"))).isEmpty(), "an unknown id is absent");
     }
 
     @Test
@@ -480,7 +478,7 @@ abstract class StorageContract {
     void instanceNullablesStayNull() {
         Instance i = instance(id("wf"));
         store(i);
-        Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        Instance back = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
         assertNull(back.correlationId);
         assertNull(back.parentTokenId);
         assertNull(back.terminationReason);
@@ -493,17 +491,17 @@ abstract class StorageContract {
         Instance i = instance(id("wf"));
         store(i);
 
-        Instance live = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        Instance live = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
         long before = live.revision;
         live.status = InstanceStatus.FAILED;
         live.terminationReason = "step failed";
         live.error = "handler threw";
         live.context = doc("stage", "failed");
         live.updatedAt = now + 5;
-        storage.inTxVoid(tx -> tx.updateInstance(live));
+        TestTx.inHome(storage, () -> Repositories.instances().updateInstance(live));
 
         assertEquals(before + 1, live.revision, "the caller's row is advanced too: the engine writes it back");
-        Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        Instance back = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
         assertEquals(InstanceStatus.FAILED, back.status);
         assertEquals("step failed", back.terminationReason);
         assertEquals("handler threw", back.error);
@@ -520,7 +518,7 @@ abstract class StorageContract {
         i.parentTokenId = id("tok");
         store(i);
 
-        Instance live = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        Instance live = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
         live.workflow = id("rewritten");
         live.version = 99;
         live.correlationId = "rewritten";
@@ -528,9 +526,9 @@ abstract class StorageContract {
         live.createdAt = now + 10_000;
         live.status = InstanceStatus.COMPLETED;      // one mutable field, so the write is no no-op
         live.updatedAt = now + 1;
-        storage.inTxVoid(tx -> tx.updateInstance(live));
+        TestTx.inHome(storage, () -> Repositories.instances().updateInstance(live));
 
-        Instance back = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+        Instance back = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
         assertEquals(InstanceStatus.COMPLETED, back.status, "the mutable field was written");
         assertEquals(now + 1, back.updatedAt);
         // And none of the rest, however the caller had left them: an instance's workflow, its
@@ -548,18 +546,18 @@ abstract class StorageContract {
         Instance i = instance(id("wf"));
         store(i);
         for (int k = 0; k < 2; k++) {
-            Instance live = storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow();
+            Instance live = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow();
             live.updatedAt = now + k;
-            storage.inTxVoid(tx -> tx.updateInstance(live));
+            TestTx.inHome(storage, () -> Repositories.instances().updateInstance(live));
         }
-        assertEquals(2, storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow().revision);
+        assertEquals(2, TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow().revision);
 
         // A caller that never re-read, so its copy still says revision 0. The next revision is the
         // stored one plus one: a stale writer cannot walk it backwards.
         i.revision = 0;
         i.updatedAt = now + 5;
-        storage.inTxVoid(tx -> tx.updateInstance(i));
-        assertEquals(3, storage.inTx(tx -> tx.findInstance(i.id)).orElseThrow().revision);
+        TestTx.inHome(storage, () -> Repositories.instances().updateInstance(i));
+        assertEquals(3, TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).orElseThrow().revision);
         assertEquals(1, i.revision, "and the caller's own copy is advanced from where it was");
     }
 
@@ -567,8 +565,8 @@ abstract class StorageContract {
     @DisplayName("updateInstance on a row that is not there creates nothing")
     void updateInstanceOnAMissingRowIsANoOp() {
         Instance never = instance(id("wf"));
-        storage.inTxVoid(tx -> tx.updateInstance(never));
-        assertTrue(storage.inTx(tx -> tx.findInstance(never.id)).isEmpty(),
+        TestTx.inHome(storage, () -> Repositories.instances().updateInstance(never));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().findInstance(never.id)).isEmpty(),
                 "a write-back is not a way to insert");
     }
 
@@ -581,21 +579,21 @@ abstract class StorageContract {
         store(a);
         store(b);
 
-        List<Instance> both = storage.inTx(tx -> tx.lockInstances(
+        List<Instance> both = TestTx.inHome(storage, () -> Repositories.instances().lockInstances(
                 Stream.of(a.id, b.id).sorted().toList()));
         for (Instance i : both) {
             i.status = InstanceStatus.COMPLETED;
             i.updatedAt = now + 9;
         }
-        storage.inTxVoid(tx -> tx.updateInstances(both));
+        TestTx.inHome(storage, () -> Repositories.instances().updateInstances(both));
 
         for (String id : List.of(a.id, b.id)) {
-            Instance back = storage.inTx(tx -> tx.findInstance(id)).orElseThrow();
+            Instance back = TestTx.inHome(storage, () -> Repositories.instances().findInstance(id)).orElseThrow();
             assertEquals(InstanceStatus.COMPLETED, back.status);
             assertEquals(now + 9, back.updatedAt);
             assertEquals(1, back.revision, "one update, one revision");
         }
-        storage.inTxVoid(tx -> tx.updateInstances(List.of()));
+        TestTx.inHome(storage, () -> Repositories.instances().updateInstances(List.of()));
     }
 
     @Test
@@ -614,13 +612,13 @@ abstract class StorageContract {
         store(newest);
 
         assertEquals(List.of(newest.id, mid.id, old.id),
-                storage.inTx(tx -> tx.listInstances(wf, null, 10)).stream().map(i -> i.id).toList(),
+                TestTx.inHome(storage, () -> Repositories.instances().listInstances(wf, null, 10)).stream().map(i -> i.id).toList(),
                 "newest first by creation");
         assertEquals(List.of(mid.id, old.id),
-                storage.inTx(tx -> tx.listInstances(wf, InstanceStatus.RUNNING, 10)).stream().map(i -> i.id).toList(),
+                TestTx.inHome(storage, () -> Repositories.instances().listInstances(wf, InstanceStatus.RUNNING, 10)).stream().map(i -> i.id).toList(),
                 "and narrowed by status");
         assertEquals(List.of(newest.id),
-                storage.inTx(tx -> tx.listInstances(wf, null, 1)).stream().map(i -> i.id).toList(),
+                TestTx.inHome(storage, () -> Repositories.instances().listInstances(wf, null, 1)).stream().map(i -> i.id).toList(),
                 "the limit takes the newest, not an arbitrary row");
     }
 
@@ -638,23 +636,23 @@ abstract class StorageContract {
         store(second);
 
         assertEquals(List.of(second.id, first.id),
-                storage.inTx(tx -> tx.findByCorrelation(key, 10)).stream().map(i -> i.id).toList());
+                TestTx.inHome(storage, () -> Repositories.instances().findByCorrelation(key, 10)).stream().map(i -> i.id).toList());
         assertEquals(List.of(second.id),
-                storage.inTx(tx -> tx.findByCorrelation(key, 1)).stream().map(i -> i.id).toList());
-        assertTrue(storage.inTx(tx -> tx.findByCorrelation("nothing-" + run, 10)).isEmpty());
+                TestTx.inHome(storage, () -> Repositories.instances().findByCorrelation(key, 1)).stream().map(i -> i.id).toList());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().findByCorrelation("nothing-" + run, 10)).isEmpty());
     }
 
     @Test
     @DisplayName("countInstances counts by status")
     void countInstancesCountsByStatus() {
-        int before = inTxInt(tx -> tx.countInstances(InstanceStatus.CANCELLED));
+        int before = inHomeInt(() -> Repositories.instances().countInstances(InstanceStatus.CANCELLED));
         String wf = id("wf");
         for (int k = 0; k < 2; k++) {
             Instance i = instance(wf);
             i.status = InstanceStatus.CANCELLED;
             store(i);
         }
-        assertEquals(before + 2, inTxInt(tx -> tx.countInstances(InstanceStatus.CANCELLED)));
+        assertEquals(before + 2, inHomeInt(() -> Repositories.instances().countInstances(InstanceStatus.CANCELLED)));
     }
 
     // -- tokens --
@@ -682,7 +680,7 @@ abstract class StorageContract {
                 .withStaged(Map.of("left", "done"));
         store(i, t);
 
-        Token back = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        Token back = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
         assertEquals(t.id, back.id);
         assertEquals(i.id, back.instanceId);
         assertEquals(i.workflow, back.workflow);
@@ -709,7 +707,7 @@ abstract class StorageContract {
         // Every store encodes the payload on write, so what comes back is what the codec makes of
         // it -- a JSON number is a Long either way -- and not the object that was handed in.
         assertEquals(PayloadCodec.decode(PayloadCodec.encode(t.payload)), back.payload);
-        assertTrue(storage.inTx(tx -> tx.findToken(id("tok"))).isEmpty(), "an unknown id is absent");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().findToken(id("tok"))).isEmpty(), "an unknown id is absent");
     }
 
     @Test
@@ -718,19 +716,19 @@ abstract class StorageContract {
         Instance i = instance(id("wf"));
         Token t = token(i, NodeKind.TASK, TokenStatus.RUNNING, id("q"));
         store(i, t);
-        assertNull(storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().stepInput, "nothing recorded yet");
+        assertNull(TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow().stepInput, "nothing recorded yet");
 
-        Token settled = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        Token settled = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
         settled.stepInput = "{\"in\":1}";
         settled.stepOutput = "true";
-        storage.inTx(tx -> { tx.updateToken(settled); return null; });
-        Token back = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        TestTx.inHome(storage, () -> { Repositories.tokens().updateToken(settled); return null; });
+        Token back = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
         assertEquals("{\"in\":1}", back.stepInput);
         assertEquals("true", back.stepOutput);
 
         back.stepOutput = null;
-        storage.inTx(tx -> { tx.updateToken(back); return null; });
-        assertNull(storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().stepOutput);
+        TestTx.inHome(storage, () -> { Repositories.tokens().updateToken(back); return null; });
+        assertNull(TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow().stepOutput);
     }
 
     @Test
@@ -739,7 +737,7 @@ abstract class StorageContract {
         Instance i = instance(id("wf"));
         Token t = token(i, NodeKind.TASK, TokenStatus.READY, id("q"));
         store(i, t);
-        Token back = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        Token back = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
         assertEquals(TokenPayload.EMPTY, back.payload);
         assertEquals("", back.joinStack);
         assertNull(back.currentJoinGroup());
@@ -756,29 +754,29 @@ abstract class StorageContract {
         String q = id("q");
         Token a = token(i, NodeKind.TASK, TokenStatus.READY, q);
         Token b = token(i, NodeKind.TASK, TokenStatus.READY, q);
-        storage.inTxVoid(tx -> {
-            tx.insertInstance(i);
-            tx.insertTokens(List.of(a, b));
+        TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            Repositories.tokens().insertTokens(List.of(a, b));
         });
 
         List<String> asked = new ArrayList<>(List.of(a.id, b.id, id("tok")));
-        List<Token> found = storage.inTx(tx -> tx.findTokens(asked));
+        List<Token> found = TestTx.inHome(storage, () -> Repositories.tokens().findTokens(asked));
         assertEquals(Set.of(a.id, b.id), Set.copyOf(idsOf(found)), "missing ids are absent, order is free");
 
         for (Token t : found) {
             t.status = TokenStatus.DONE;
             t.updatedAt = now + 3;
         }
-        storage.inTxVoid(tx -> tx.updateTokens(found));
+        TestTx.inHome(storage, () -> Repositories.tokens().updateTokens(found));
         for (String id : List.of(a.id, b.id)) {
-            Token back = storage.inTx(tx -> tx.findToken(id)).orElseThrow();
+            Token back = TestTx.inHome(storage, () -> Repositories.tokens().findToken(id)).orElseThrow();
             assertEquals(TokenStatus.DONE, back.status);
             assertEquals(now + 3, back.updatedAt);
         }
 
-        storage.inTxVoid(tx -> tx.insertTokens(List.of()));
-        assertTrue(storage.inTx(tx -> tx.findTokens(List.of())).isEmpty());
-        storage.inTxVoid(tx -> tx.updateTokens(List.of()));
+        TestTx.inHome(storage, () -> Repositories.tokens().insertTokens(List.of()));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().findTokens(List.of())).isEmpty());
+        TestTx.inHome(storage, () -> Repositories.tokens().updateTokens(List.of()));
     }
 
     @Test
@@ -793,8 +791,8 @@ abstract class StorageContract {
         store(mine, a, b);
         store(other, token(other, NodeKind.TASK, TokenStatus.READY, q));
 
-        assertEquals(Set.of(a.id, b.id), Set.copyOf(idsOf(storage.inTx(tx -> tx.tokensOf(mine.id)))));
-        assertTrue(storage.inTx(tx -> tx.tokensOf(id("wfi"))).isEmpty());
+        assertEquals(Set.of(a.id, b.id), Set.copyOf(idsOf(TestTx.inHome(storage, () -> Repositories.tokens().tokensOf(mine.id)))));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().tokensOf(id("wfi"))).isEmpty());
     }
 
     @Test
@@ -804,13 +802,13 @@ abstract class StorageContract {
         Token active = token(i, NodeKind.SIGNAL, TokenStatus.AWAITING, null);
         Token done = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
         store(i, active, done);
-        assertTrue(inTxBoolean(tx -> tx.hasActiveTokens(i.id)), "one AWAITING token is enough");
+        assertTrue(inHomeBoolean(() -> Repositories.tokens().hasActiveTokens(i.id)), "one AWAITING token is enough");
 
         active.status = TokenStatus.CANCELLED;
         active.updatedAt = now + 1;
-        storage.inTxVoid(tx -> tx.updateToken(active));
-        assertFalse(inTxBoolean(tx -> tx.hasActiveTokens(i.id)), "DONE and CANCELLED are not active");
-        assertFalse(inTxBoolean(tx -> tx.hasActiveTokens(id("wfi"))), "an unknown instance has none");
+        TestTx.inHome(storage, () -> Repositories.tokens().updateToken(active));
+        assertFalse(inHomeBoolean(() -> Repositories.tokens().hasActiveTokens(i.id)), "DONE and CANCELLED are not active");
+        assertFalse(inHomeBoolean(() -> Repositories.tokens().hasActiveTokens(id("wfi"))), "an unknown instance has none");
     }
 
     @Test
@@ -831,10 +829,10 @@ abstract class StorageContract {
         stillRunning.joinStack = "fork-1";
         store(i, arrivedA, arrivedB, elsewhere, stillRunning);
 
-        assertEquals(List.of("fork-1", "fork-1"), storage.inTx(tx -> tx.joinStacksAt(i.id, "j1")),
+        assertEquals(List.of("fork-1", "fork-1"), TestTx.inHome(storage, () -> Repositories.tokens().joinStacksAt(i.id, "j1")),
                 "both arrivals at this barrier, and neither the token still running nor the other node");
-        assertEquals(List.of("fork-9"), storage.inTx(tx -> tx.joinStacksAt(i.id, "j2")));
-        assertTrue(storage.inTx(tx -> tx.joinStacksAt(i.id, "j3")).isEmpty());
+        assertEquals(List.of("fork-9"), TestTx.inHome(storage, () -> Repositories.tokens().joinStacksAt(i.id, "j2")));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().joinStacksAt(i.id, "j3")).isEmpty());
     }
 
     @Test
@@ -848,15 +846,15 @@ abstract class StorageContract {
         Token settled = token(i, NodeKind.TASK, TokenStatus.DONE, id("q"));
         store(i, leased, parked, settled);
 
-        storage.inTxVoid(tx -> tx.cancelActiveTokens(i.id, now + 7));
+        TestTx.inHome(storage, () -> Repositories.tokens().cancelActiveTokens(i.id, now + 7));
 
-        Token wasLeased = storage.inTx(tx -> tx.findToken(leased.id)).orElseThrow();
+        Token wasLeased = TestTx.inHome(storage, () -> Repositories.tokens().findToken(leased.id)).orElseThrow();
         assertEquals(TokenStatus.CANCELLED, wasLeased.status);
         assertNull(wasLeased.leaseOwner, "a cancelled token holds no lease");
         assertEquals(0, wasLeased.leaseExpiresAt);
         assertEquals(now + 7, wasLeased.updatedAt);
-        assertEquals(TokenStatus.CANCELLED, storage.inTx(tx -> tx.findToken(parked.id)).orElseThrow().status);
-        assertEquals(TokenStatus.DONE, storage.inTx(tx -> tx.findToken(settled.id)).orElseThrow().status,
+        assertEquals(TokenStatus.CANCELLED, TestTx.inHome(storage, () -> Repositories.tokens().findToken(parked.id)).orElseThrow().status);
+        assertEquals(TokenStatus.DONE, TestTx.inHome(storage, () -> Repositories.tokens().findToken(settled.id)).orElseThrow().status,
                 "a settled token is not re-stamped");
     }
 
@@ -878,8 +876,8 @@ abstract class StorageContract {
         store(unrelated);
 
         assertEquals(Stream.of(childA.id, childB.id).sorted().toList(),
-                storage.inTx(tx -> tx.childInstanceIds(parent.id)), "by id, and nobody else's children");
-        assertTrue(storage.inTx(tx -> tx.childInstanceIds(unrelated.id)).isEmpty());
+                TestTx.inHome(storage, () -> Repositories.instances().childInstanceIds(parent.id)), "by id, and nobody else's children");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().childInstanceIds(unrelated.id)).isEmpty());
     }
 
     // -- WGL-STOR-021/022: the claim, whichever statement the dialect uses --
@@ -905,10 +903,10 @@ abstract class StorageContract {
         store(newer, newerReadyLongest);
 
         assertEquals(List.of(olderReadyLater.id),
-                idsOf(storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 1, now, now + 1_000))),
+                idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), null, 1, now, now + 1_000))),
                 "the older instance first, though the newer one's task has been ready longer");
         assertEquals(List.of(newerReadyLongest.id),
-                idsOf(storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 10, now, now + 1_000))),
+                idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), null, 10, now, now + 1_000))),
                 "a task not yet due is stepped over, not the end of the scan");
     }
 
@@ -921,7 +919,7 @@ abstract class StorageContract {
         t.availableAt = ANCIENT;
         store(i, t);
 
-        List<Token> claimed = storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 10, now, now + 30_000));
+        List<Token> claimed = TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), null, 10, now, now + 30_000));
         assertEquals(List.of(t.id), idsOf(claimed));
         Token got = claimed.getFirst();
         assertEquals(TokenStatus.RUNNING, got.status);
@@ -930,9 +928,9 @@ abstract class StorageContract {
         assertEquals(now, got.startedAt, "the step's clock starts when a worker takes it");
         assertNull(got.finishedAt);
 
-        assertTrue(storage.inTx(tx -> tx.claimTasks("w2", Set.of(q), null, 10, now, now + 30_000)).isEmpty(),
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w2", Set.of(q), null, 10, now, now + 30_000)).isEmpty(),
                 "a claimed token is not offered again");
-        Token stored = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+        Token stored = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
         assertEquals(TokenStatus.RUNNING, stored.status, "and the lease is durable, not just returned");
         assertEquals("w1", stored.leaseOwner);
     }
@@ -956,14 +954,14 @@ abstract class StorageContract {
 
         Set<WorkflowVersion> only = Set.of(new WorkflowVersion(wanted, 1));
         assertEquals(List.of(onQueue.id),
-                idsOf(storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), only, 10, now, now + 1_000))),
+                idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), only, 10, now, now + 1_000))),
                 "the queue narrows it, and so does the worker's bound version");
 
         assertEquals(List.of(otherQueue.id),
-                idsOf(storage.inTx(tx -> tx.claimTasks("w2", Set.of(), only, 10, now, now + 1_000))),
+                idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w2", Set.of(), only, 10, now, now + 1_000))),
                 "an empty queue set is no queue filter: the version-scoped worker still gets its own work");
         assertEquals(List.of(otherVersion.id),
-                idsOf(storage.inTx(tx -> tx.claimTasks("w3", Set.of(q), null, 10, now, now + 1_000))),
+                idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w3", Set.of(q), null, 10, now, now + 1_000))),
                 "and a null version set is no version filter");
     }
 
@@ -1045,7 +1043,7 @@ abstract class StorageContract {
             assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
 
             ClaimFilter filter = new ClaimFilter(List.of(criteria), null);
-            Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
+            Set<String> claimed = Set.copyOf(idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", filter, 10, now, now + 1_000))));
             Set<Integer> got = new TreeSet<>();
             for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
             assertEquals(new TreeSet<>(c.expected()), got, c.name() + ": the claim");
@@ -1114,7 +1112,7 @@ abstract class StorageContract {
             assertEquals(new TreeSet<>(c.expected()), reference, c.name() + ": the in-memory evaluator");
 
             ClaimFilter filter = new ClaimFilter(List.of(criteria), null);
-            Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 10, now, now + 1_000))));
+            Set<String> claimed = Set.copyOf(idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", filter, 10, now, now + 1_000))));
             Set<Integer> got = new TreeSet<>();
             for (int k = 0; k < fixture.size(); k++) if (claimed.contains(fixture.get(k).id)) got.add(k + 1);
             assertEquals(new TreeSet<>(c.expected()), got, c.name() + ": the claim");
@@ -1129,16 +1127,16 @@ abstract class StorageContract {
         Token later = fixture.get(1).clone();
         later.id = id("tok");
         later.availableAt = now + 60_000;
-        storage.inTxVoid(tx -> tx.insertToken(later));
+        TestTx.inHome(storage, () -> Repositories.tokens().insertToken(later));
         var region = Task_.attr("region", String.class);
         Predicate eu = QueueCriteria.from(q).where(cb -> cb.equal(region, "eu")).where();
         Predicate notEu = QueueCriteria.from(q).where(cb -> cb.not(cb.equal(region, "eu"))).where();
 
-        assertEquals(1, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, eu, now, 100)));
-        assertEquals(4, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, notEu, now, 100)), "not due is not counted");
-        assertEquals(5, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, null, now, 100)));
-        assertEquals(2, (int) storage.inTx(tx -> tx.countReady("attr-wf", 1, q, null, now, 2)), "the cap");
-        assertEquals(0, (int) storage.inTx(tx -> tx.countReady("attr-wf", 2, q, null, now, 100)), "the version is the slice's");
+        assertEquals(1, (int) TestTx.inHome(storage, () -> Repositories.tokens().countReady("attr-wf", 1, q, eu, now, 100)));
+        assertEquals(4, (int) TestTx.inHome(storage, () -> Repositories.tokens().countReady("attr-wf", 1, q, notEu, now, 100)), "not due is not counted");
+        assertEquals(5, (int) TestTx.inHome(storage, () -> Repositories.tokens().countReady("attr-wf", 1, q, null, now, 100)));
+        assertEquals(2, (int) TestTx.inHome(storage, () -> Repositories.tokens().countReady("attr-wf", 1, q, null, now, 2)), "the cap");
+        assertEquals(0, (int) TestTx.inHome(storage, () -> Repositories.tokens().countReady("attr-wf", 2, q, null, now, 100)), "the version is the slice's");
     }
 
     @Test
@@ -1153,14 +1151,14 @@ abstract class StorageContract {
         store(i, t);
         t.attributes = Map.of("region", "eu");
         t.attributesChanged = true;
-        storage.inTxVoid(tx -> tx.updateToken(t));
+        TestTx.inHome(storage, () -> Repositories.tokens().updateToken(t));
 
         var region = Task_.attr("region", String.class);
         ClaimFilter us = new ClaimFilter(List.of(QueueCriteria.from(q).where(cb -> cb.or(
                 cb.equal(region, "us"), cb.isNotNull(Task_.attr("tier", String.class))))), null);
-        assertTrue(storage.inTx(tx -> tx.claimTasks("w1", us, 10, now, now + 1_000)).isEmpty(), "the old rows are gone");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", us, 10, now, now + 1_000)).isEmpty(), "the old rows are gone");
         ClaimFilter eu = new ClaimFilter(List.of(QueueCriteria.from(q).where(cb -> cb.equal(region, "eu"))), null);
-        assertEquals(List.of(t.id), idsOf(storage.inTx(tx -> tx.claimTasks("w1", eu, 10, now, now + 1_000))));
+        assertEquals(List.of(t.id), idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", eu, 10, now, now + 1_000))));
     }
 
     @Test
@@ -1177,7 +1175,7 @@ abstract class StorageContract {
                 QueueCriteria.from(q2).where(cb -> cb.equal(Task_.WORKFLOW, "crit-b")),
                 QueueCriteria.from(q3)), null);
 
-        Set<String> claimed = Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", filter, 20, now, now + 1_000))));
+        Set<String> claimed = Set.copyOf(idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", filter, 20, now, now + 1_000))));
         Set<String> expected = Stream.of(
                         first.stream().filter(t -> t.workflow.equals("crit-a")),
                         second.stream().filter(t -> t.workflow.equals("crit-b")),
@@ -1199,19 +1197,19 @@ abstract class StorageContract {
         }
         Token later = token(i, NodeKind.TASK, TokenStatus.READY, q);
         later.availableAt = now + 3_600_000;
-        storage.inTxVoid(tx -> {
-            tx.insertInstance(i);
-            tx.insertTokens(due);
-            tx.insertToken(later);
+        TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            Repositories.tokens().insertTokens(due);
+            Repositories.tokens().insertToken(later);
         });
 
-        List<Token> first = storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 2, now, now + 1_000));
+        List<Token> first = TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), null, 2, now, now + 1_000));
         assertEquals(2, first.size(), "max bounds one claim");
-        List<Token> rest = storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 10, now, now + 1_000));
+        List<Token> rest = TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), null, 10, now, now + 1_000));
         assertEquals(1, rest.size(), "the third is still there; the one not yet due is not");
         assertEquals(Set.copyOf(idsOf(due)),
                 Set.copyOf(idsOf(Stream.concat(first.stream(), rest.stream()).toList())));
-        assertEquals(TokenStatus.READY, storage.inTx(tx -> tx.findToken(later.id)).orElseThrow().status);
+        assertEquals(TokenStatus.READY, TestTx.inHome(storage, () -> Repositories.tokens().findToken(later.id)).orElseThrow().status);
     }
 
     @Test
@@ -1229,17 +1227,17 @@ abstract class StorageContract {
             t.availableAt = ANCIENT;
             never.add(t);
         }
-        storage.inTxVoid(tx -> {
-            tx.insertInstance(i);
-            tx.insertTokens(Stream.concat(
+        TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            Repositories.tokens().insertTokens(Stream.concat(
                     Stream.of(task, predicate), never.stream()).toList());
         });
 
         assertEquals(Set.of(task.id, predicate.id),
-                Set.copyOf(idsOf(storage.inTx(tx -> tx.claimTasks("w1", Set.of(q), null, 10, now, now + 1_000)))),
+                Set.copyOf(idsOf(TestTx.inHome(storage, () -> Repositories.tokens().claimTasks("w1", Set.of(q), null, 10, now, now + 1_000)))),
                 "TASK and PREDICATE are dispatchable; the server's own kinds never are");
         for (Token t : never) {
-            assertEquals(TokenStatus.READY, storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().status);
+            assertEquals(TokenStatus.READY, TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow().status);
         }
     }
 
@@ -1254,14 +1252,14 @@ abstract class StorageContract {
             t.availableAt = ANCIENT + k;
             backlog.add(t);
         }
-        storage.inTxVoid(tx -> {
-            tx.insertInstance(i);
-            tx.insertTokens(backlog);
+        TestTx.inHome(storage, () -> {
+            Repositories.instances().insertInstance(i);
+            Repositories.tokens().insertTokens(backlog);
         });
 
         List<Token> all = Collections.synchronizedList(new ArrayList<>());
-        race(2, () -> all.addAll(storage.inTx(tx ->
-                tx.claimTasks("race-" + Thread.currentThread().threadId(), Set.of(q), null, 16,
+        race(2, () -> all.addAll(TestTx.inHome(storage, () ->
+                Repositories.tokens().claimTasks("race-" + Thread.currentThread().threadId(), Set.of(q), null, 16,
                         now, now + 30_000))));
 
         List<String> claimed = idsOf(List.copyOf(all));
@@ -1287,12 +1285,12 @@ abstract class StorageContract {
 
         // The sweep reaches the whole store, so the assertion is about this test's own rows: the
         // contract fixes which of them are due, not their position among everyone else's.
-        List<String> swept = idsOf(storage.inTx(tx -> tx.dueTimers(ANCIENT + 1, 10_000)));
+        List<String> swept = idsOf(TestTx.inHome(storage, () -> Repositories.tokens().dueTimers(ANCIENT + 1, 10_000)));
         assertTrue(swept.contains(ripe.id), "a WAITING SLEEP whose fire time has passed");
         assertFalse(swept.contains(later.id), "not one still in the future");
         assertFalse(swept.contains(notATimer.id), "not a signal wait");
         assertFalse(swept.contains(alreadyWoken.id), "not one already promoted");
-        assertTrue(storage.inTx(tx -> tx.dueTimers(ANCIENT + 1, 1)).size() <= 1, "max bounds the sweep");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().dueTimers(ANCIENT + 1, 1)).size() <= 1, "max bounds the sweep");
     }
 
     @Test
@@ -1310,11 +1308,11 @@ abstract class StorageContract {
         store(i, older, newer, notWaiting);
 
         List<String> ids = List.of(older.id, newer.id, notWaiting.id);
-        List<String> pending = storage.inTx(tx -> tx.pendingSignals(10_000)).stream()
+        List<String> pending = TestTx.inHome(storage, () -> Repositories.tokens().pendingSignals(10_000)).stream()
                 .map(t -> t.id).filter(ids::contains).toList();
         assertEquals(List.of(older.id, newer.id), pending, "oldest first, and only the ones still waiting");
 
-        List<String> due = idsOf(storage.inTx(tx -> tx.dueSignals(ANCIENT + 1, 10_000)));
+        List<String> due = idsOf(TestTx.inHome(storage, () -> Repositories.tokens().dueSignals(ANCIENT + 1, 10_000)));
         assertTrue(due.contains(newer.id), "a deadline that has passed is due");
         assertFalse(due.contains(older.id), "a wait with no deadline never becomes due");
     }
@@ -1333,7 +1331,7 @@ abstract class StorageContract {
         stillGood.leaseExpiresAt = now + 3_600_000;
         store(i, expired, neverLeased, stillGood);
 
-        List<String> swept = idsOf(storage.inTx(tx -> tx.expiredLeases(ANCIENT + 1, 10_000)));
+        List<String> swept = idsOf(TestTx.inHome(storage, () -> Repositories.tokens().expiredLeases(ANCIENT + 1, 10_000)));
         assertTrue(swept.contains(expired.id));
         assertFalse(swept.contains(neverLeased.id), "a zero expiry is no lease, not one long overdue");
         assertFalse(swept.contains(stillGood.id));
@@ -1352,16 +1350,16 @@ abstract class StorageContract {
         store(terminal, orphanIfLeft);
         store(live);
         CompLog entry = compEntry(terminal, 1);
-        storage.inTxVoid(tx -> tx.appendCompensation(entry));
+        TestTx.inHome(storage, () -> Repositories.compensation().appendCompensation(entry));
 
-        assertTrue(storage.inTx(tx -> tx.deleteTerminalInstancesBefore(ANCIENT + 1, 1_000)) >= 1);
-        assertTrue(storage.inTx(tx -> tx.findInstance(terminal.id)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.findToken(orphanIfLeft.id)).isEmpty(),
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().deleteTerminalInstancesBefore(ANCIENT + 1, 1_000)) >= 1);
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().findInstance(terminal.id)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().findToken(orphanIfLeft.id)).isEmpty(),
                 "a token outliving its instance is a leak");
-        assertTrue(storage.inTx(tx -> tx.compensationLog(terminal.id)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.findInstance(live.id)).isPresent(),
+        assertTrue(TestTx.inHome(storage, () -> Repositories.compensation().compensationLog(terminal.id)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().findInstance(live.id)).isPresent(),
                 "a RUNNING instance is never terminal, however old");
-        assertTrue(storage.inTx(tx -> tx.deleteTerminalInstancesBefore(ANCIENT + 1, 1)) <= 1,
+        assertTrue(TestTx.inHome(storage, () -> Repositories.instances().deleteTerminalInstancesBefore(ANCIENT + 1, 1)) <= 1,
                 "the limit bounds one pass");
     }
 
@@ -1378,26 +1376,26 @@ abstract class StorageContract {
         s.context = doc("tenant", "acme");
         s.nextFireAt = ANCIENT;
         s.createdAt = now;
-        storage.inTxVoid(tx -> tx.putSchedule(s));
+        TestTx.inHome(storage, () -> Repositories.schedules().putSchedule(s));
 
-        Schedule back = storage.inTx(tx -> tx.scheduleByWorkflow(s.workflow)).orElseThrow();
+        Schedule back = TestTx.inHome(storage, () -> Repositories.schedules().scheduleByWorkflow(s.workflow)).orElseThrow();
         assertEquals(s.id, back.id);
         assertEquals(0, back.intervalMillis);
         assertEquals("0 */5 * * * *", back.cron, "a cron cadence survives as text, not as an interval");
         assertEquals(s.context.json(), back.context.json());
         assertEquals(ANCIENT, back.nextFireAt);
         assertEquals(now, back.createdAt);
-        assertTrue(storage.inTx(tx -> tx.schedules()).stream().anyMatch(x -> x.id.equals(s.id)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.schedules().schedules()).stream().anyMatch(x -> x.id.equals(s.id)));
 
         s.intervalMillis = 60_000;
         s.cron = null;
-        storage.inTxVoid(tx -> tx.putSchedule(s));
-        Schedule replaced = storage.inTx(tx -> tx.scheduleByWorkflow(s.workflow)).orElseThrow();
+        TestTx.inHome(storage, () -> Repositories.schedules().putSchedule(s));
+        Schedule replaced = TestTx.inHome(storage, () -> Repositories.schedules().scheduleByWorkflow(s.workflow)).orElseThrow();
         assertEquals(60_000, replaced.intervalMillis, "putSchedule upserts by id");
         assertNull(replaced.cron);
 
-        storage.inTxVoid(tx -> tx.deleteSchedule(s.id));
-        assertTrue(storage.inTx(tx -> tx.scheduleByWorkflow(s.workflow)).isEmpty());
+        TestTx.inHome(storage, () -> Repositories.schedules().deleteSchedule(s.id));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.schedules().scheduleByWorkflow(s.workflow)).isEmpty());
     }
 
     @Test
@@ -1406,20 +1404,20 @@ abstract class StorageContract {
         Schedule soon = schedule(ANCIENT);
         Schedule later = schedule(ANCIENT + 1);
         Schedule future = schedule(now + 3_600_000);
-        for (Schedule s : List.of(soon, later, future)) storage.inTxVoid(tx -> tx.putSchedule(s));
+        for (Schedule s : List.of(soon, later, future)) TestTx.inHome(storage, () -> Repositories.schedules().putSchedule(s));
 
         List<String> ids = List.of(soon.id, later.id, future.id);
         assertEquals(List.of(soon.id, later.id),
-                storage.inTx(tx -> tx.dueSchedules(ANCIENT + 2, 10_000)).stream()
+                TestTx.inHome(storage, () -> Repositories.schedules().dueSchedules(ANCIENT + 2, 10_000)).stream()
                         .map(s -> s.id).filter(ids::contains).toList(),
                 "soonest first, and nothing not yet due");
 
-        assertTrue(inTxBoolean(tx -> tx.claimSchedule(soon.id, ANCIENT, now + 60_000)),
+        assertTrue(inHomeBoolean(() -> Repositories.schedules().claimSchedule(soon.id, ANCIENT, now + 60_000)),
                 "the leader that reads the current fire time wins it");
-        assertFalse(inTxBoolean(tx -> tx.claimSchedule(soon.id, ANCIENT, now + 60_000)),
+        assertFalse(inHomeBoolean(() -> Repositories.schedules().claimSchedule(soon.id, ANCIENT, now + 60_000)),
                 "and an overlapping leader holding the same stale time cannot fire it twice");
-        assertEquals(now + 60_000, storage.inTx(tx -> tx.scheduleByWorkflow(soon.workflow)).orElseThrow().nextFireAt);
-        assertFalse(inTxBoolean(tx -> tx.claimSchedule(id("sch"), ANCIENT, now)), "an unknown schedule is not claimed");
+        assertEquals(now + 60_000, TestTx.inHome(storage, () -> Repositories.schedules().scheduleByWorkflow(soon.workflow)).orElseThrow().nextFireAt);
+        assertFalse(inHomeBoolean(() -> Repositories.schedules().claimSchedule(id("sch"), ANCIENT, now)), "an unknown schedule is not claimed");
     }
 
     private Schedule schedule(long nextFireAt) {
@@ -1439,7 +1437,7 @@ abstract class StorageContract {
     @DisplayName("queueDepth counts the dispatchable work that is due")
     void queueDepthCountsDueDispatchableWork() {
         long asOf = ANCIENT + 1_000;
-        Rows.QueueDepth before = storage.inTx(tx -> tx.queueDepth(asOf));
+        Rows.QueueDepth before = TestTx.inHome(storage, () -> Repositories.tokens().queueDepth(asOf));
 
         Instance i = instance(id("wf"));
         String q = id("q");
@@ -1453,7 +1451,7 @@ abstract class StorageContract {
         future.availableAt = now + 3_600_000;
         store(i, a, b, leased, future);
 
-        Rows.QueueDepth after = storage.inTx(tx -> tx.queueDepth(asOf));
+        Rows.QueueDepth after = TestTx.inHome(storage, () -> Repositories.tokens().queueDepth(asOf));
         assertEquals(before.readyCount() + 2, after.readyCount(),
                 "the two READY and due ones; not the leased one and not the one still in the future");
         assertTrue(after.oldestAvailableAt() > 0 && after.oldestAvailableAt() <= ANCIENT,
@@ -1471,7 +1469,7 @@ abstract class StorageContract {
             store(k == 0 ? i : instance(i.workflow), t);
         }
 
-        List<Rows.BacklogSlice> mine = storage.inTx(tx -> tx.backlogByVersion(ANCIENT + 1_000, 10_000)).stream()
+        List<Rows.BacklogSlice> mine = TestTx.inHome(storage, () -> Repositories.tokens().backlogByVersion(ANCIENT + 1_000, 10_000)).stream()
                 .filter(s -> s.workflow().equals(i.workflow))
                 .toList();
         assertEquals(1, mine.size(), "one slice: one workflow, one version, one queue");
@@ -1500,17 +1498,17 @@ abstract class StorageContract {
         unfinished.startedAt = 3_000L;
         store(i, dispatched, later, unfinished);
 
-        List<Rows.StepDuration> steps = storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 0, 10));
+        List<Rows.StepDuration> steps = TestTx.inHome(storage, () -> Repositories.tokens().stepDurations(i.workflow, 1, 0, 10));
         assertEquals(List.of("n-later", "n-dispatched"), steps.stream().map(Rows.StepDuration::nodeId).toList(),
                 "newest first by finish time, and nothing still running");
         assertEquals(50, steps.getFirst().millis());
         assertEquals(10, steps.getFirst().waitMillis());
         assertEquals(300, steps.getLast().millis());
         assertEquals(200, steps.getLast().waitMillis(), "ready to claimed");
-        assertTrue(storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 1_600, 10)).size() == 1,
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().stepDurations(i.workflow, 1, 1_600, 10)).size() == 1,
                 "the sample is bounded below by the mark");
-        assertEquals(1, storage.inTx(tx -> tx.stepDurations(i.workflow, 1, 0, 1)).size(), "and above by max");
-        assertTrue(storage.inTx(tx -> tx.stepDurations(i.workflow, 2, 0, 10)).isEmpty(), "one version at a time");
+        assertEquals(1, TestTx.inHome(storage, () -> Repositories.tokens().stepDurations(i.workflow, 1, 0, 1)).size(), "and above by max");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().stepDurations(i.workflow, 2, 0, 10)).isEmpty(), "one version at a time");
     }
 
     // -- shards --
@@ -1518,10 +1516,10 @@ abstract class StorageContract {
     @Test
     @DisplayName("a database is claimed for one shard, and a later claim leaves the first standing")
     void aShardIdentityIsClaimedOnce() {
-        storage.inTxVoid(tx -> tx.claimShardIdentity(7));
-        int claimed = storage.inTx(tx -> tx.shardIdentity()).orElseThrow();   // 7, or an earlier run's
-        storage.inTxVoid(tx -> tx.claimShardIdentity(claimed + 1));
-        assertEquals(claimed, storage.inTx(tx -> tx.shardIdentity()).orElseThrow());
+        TestTx.inHome(storage, () -> Repositories.shards().claimShardIdentity(7));
+        int claimed = TestTx.inHome(storage, () -> Repositories.shards().shardIdentity()).orElseThrow();   // 7, or an earlier run's
+        TestTx.inHome(storage, () -> Repositories.shards().claimShardIdentity(claimed + 1));
+        assertEquals(claimed, TestTx.inHome(storage, () -> Repositories.shards().shardIdentity()).orElseThrow());
     }
 
     @Test
@@ -1529,39 +1527,39 @@ abstract class StorageContract {
     void eventPositionsOnOtherShards() {
         String consumer = id("consumer");
         int shard = (int) (System.nanoTime() & 0x3fffffff);
-        storage.inTxVoid(tx -> tx.createEventCursorIfAbsent(new Rows.EventCursor(consumer, 0, now, now)));
-        Long oldest = storage.inTx(tx -> tx.oldestEventPosition(shard));
+        TestTx.inHome(storage, () -> Repositories.events().createEventCursorIfAbsent(new Rows.EventCursor(consumer, 0, now, now)));
+        Long oldest = TestTx.inHome(storage, () -> Repositories.events().oldestEventPosition(shard));
         assertEquals(Long.valueOf(0), oldest, "a consumer with no row holds 0");
-        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 7));
-        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 3));
-        assertEquals(Map.of(shard, 7L), storage.inTx(tx -> tx.eventPositions(consumer)), "never backwards");
-        storage.inTxVoid(tx -> tx.advanceEventPosition(consumer, shard, 9));
-        assertEquals(Long.valueOf(9), storage.inTx(tx -> tx.eventPositions(consumer).get(shard)));
-        assertTrue(storage.inTx(tx -> tx.eventPositions(id("nobody"))).isEmpty());
+        TestTx.inHome(storage, () -> Repositories.events().advanceEventPosition(consumer, shard, 7));
+        TestTx.inHome(storage, () -> Repositories.events().advanceEventPosition(consumer, shard, 3));
+        assertEquals(Map.of(shard, 7L), TestTx.inHome(storage, () -> Repositories.events().eventPositions(consumer)), "never backwards");
+        TestTx.inHome(storage, () -> Repositories.events().advanceEventPosition(consumer, shard, 9));
+        assertEquals(Long.valueOf(9), TestTx.inHome(storage, () -> Repositories.events().eventPositions(consumer).get(shard)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.events().eventPositions(id("nobody"))).isEmpty());
     }
 
     @Test
     @DisplayName("the replica heartbeat reads back what the primary last stamped")
     void theShardBeatReadsBack() {
-        storage.inTxVoid(tx -> tx.claimShardIdentity(7));
-        storage.inTxVoid(tx -> tx.writeShardBeat(now));
-        assertEquals(now, storage.inTx(tx -> tx.shardBeat()).orElseThrow());
-        storage.inTxVoid(tx -> tx.writeShardBeat(now + 1));
-        assertEquals(now + 1, storage.inTx(tx -> tx.shardBeat()).orElseThrow());
+        TestTx.inHome(storage, () -> Repositories.shards().claimShardIdentity(7));
+        TestTx.inHome(storage, () -> Repositories.shards().writeShardBeat(now));
+        assertEquals(now, TestTx.inHome(storage, () -> Repositories.shards().shardBeat()).orElseThrow());
+        TestTx.inHome(storage, () -> Repositories.shards().writeShardBeat(now + 1));
+        assertEquals(now + 1, TestTx.inHome(storage, () -> Repositories.shards().shardBeat()).orElseThrow());
     }
 
     @Test
     @DisplayName("the shard registry keeps one row per shard, replaced in place")
     void theShardRegistryKeepsOneRowPerShard() {
         int shard = (int) (System.nanoTime() & 0x3fffffff);
-        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
-        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9)));
-        List<Rows.ShardRecord> rows = storage.inTx(tx -> tx.shardRegistry()).stream()
+        TestTx.inHome(storage, () -> Repositories.shards().putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
+        TestTx.inHome(storage, () -> Repositories.shards().putShardRecord(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9)));
+        List<Rows.ShardRecord> rows = TestTx.inHome(storage, () -> Repositories.shards().shardRegistry()).stream()
                 .filter(r -> r.shardId() == shard).toList();
         assertEquals(List.of(new Rows.ShardRecord(shard, ShardState.RETIRED, ANCIENT, ANCIENT + 9L)), rows);
-        storage.inTxVoid(tx -> tx.putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
+        TestTx.inHome(storage, () -> Repositories.shards().putShardRecord(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)));
         assertEquals(List.of(new Rows.ShardRecord(shard, ShardState.ACTIVE, ANCIENT, null)),
-                storage.inTx(tx -> tx.shardRegistry()).stream().filter(r -> r.shardId() == shard).toList(),
+                TestTx.inHome(storage, () -> Repositories.shards().shardRegistry()).stream().filter(r -> r.shardId() == shard).toList(),
                 "a null retiredAt reads back null, not zero");
     }
 
@@ -1572,12 +1570,12 @@ abstract class StorageContract {
     void aNodeCarriesItsTopologyGeneration() {
         ServerNode n = serverNode(ANCIENT);
         n.topologyGeneration = 3;
-        storage.inTxVoid(tx -> tx.upsertNode(n));
+        TestTx.inHome(storage, () -> Repositories.cluster().upsertNode(n));
         assertEquals(3, node(n.id).orElseThrow().topologyGeneration);
         n.topologyGeneration = 4;
-        storage.inTxVoid(tx -> tx.upsertNode(n));
+        TestTx.inHome(storage, () -> Repositories.cluster().upsertNode(n));
         assertEquals(4, node(n.id).orElseThrow().topologyGeneration);
-        storage.inTxVoid(tx -> tx.deleteNodesOlderThan(ANCIENT + 1));
+        TestTx.inHome(storage, () -> Repositories.cluster().deleteNodesOlderThan(ANCIENT + 1));
     }
 
     @Test
@@ -1587,14 +1585,14 @@ abstract class StorageContract {
         // end has a cutoff that separates them.
         ServerNode first = serverNode(ANCIENT);
         ServerNode second = serverNode(ANCIENT + 1_000);
-        storage.inTxVoid(tx -> tx.upsertNode(first));
-        storage.inTxVoid(tx -> tx.upsertNode(second));
+        TestTx.inHome(storage, () -> Repositories.cluster().upsertNode(first));
+        TestTx.inHome(storage, () -> Repositories.cluster().upsertNode(second));
 
         ServerNode again = serverNode(ANCIENT + 5);
         again.id = first.id;
         again.name = "renamed";
         again.workers = 9;
-        storage.inTxVoid(tx -> tx.upsertNode(again));
+        TestTx.inHome(storage, () -> Repositories.cluster().upsertNode(again));
 
         ServerNode back = node(first.id).orElseThrow();
         assertEquals(ANCIENT, back.firstHeartbeat, "the first heartbeat is when this node joined, once");
@@ -1603,19 +1601,19 @@ abstract class StorageContract {
         assertEquals(9, back.workers);
         assertFalse(back.leader);
 
-        storage.inTxVoid(tx -> tx.setLeader(first.id, true));
+        TestTx.inHome(storage, () -> Repositories.cluster().setLeader(first.id, true));
         assertTrue(node(first.id).orElseThrow().leader);
         assertFalse(node(second.id).orElseThrow().leader, "leadership is set on one node, not swapped");
 
         List<String> ids = List.of(first.id, second.id);
-        assertEquals(ids, storage.inTx(tx -> tx.nodes()).stream()
+        assertEquals(ids, TestTx.inHome(storage, () -> Repositories.cluster().nodes()).stream()
                         .map(n -> n.id).filter(ids::contains).toList(),
                 "listed by the order they joined");
 
-        storage.inTxVoid(tx -> tx.deleteNodesOlderThan(ANCIENT + 6));
+        TestTx.inHome(storage, () -> Repositories.cluster().deleteNodesOlderThan(ANCIENT + 6));
         assertTrue(node(first.id).isEmpty(), "a node that stopped heartbeating is dropped");
         assertTrue(node(second.id).isPresent(), "and one still heartbeating is not");
-        storage.inTxVoid(tx -> tx.deleteNodesOlderThan(ANCIENT + 1_001));
+        TestTx.inHome(storage, () -> Repositories.cluster().deleteNodesOlderThan(ANCIENT + 1_001));
     }
 
     private ServerNode serverNode(long heartbeat) {
@@ -1629,7 +1627,7 @@ abstract class StorageContract {
     }
 
     private Optional<ServerNode> node(String id) {
-        return storage.inTx(tx -> tx.nodes()).stream().filter(n -> n.id.equals(id)).findFirst();
+        return TestTx.inHome(storage, () -> Repositories.cluster().nodes()).stream().filter(n -> n.id.equals(id)).findFirst();
     }
 
     // -- the compensation log --
@@ -1641,12 +1639,12 @@ abstract class StorageContract {
         store(i);
         CompLog one = compEntry(i, 1);
         CompLog two = compEntry(i, 2);
-        storage.inTxVoid(tx -> {
-            tx.appendCompensation(two);
-            tx.appendCompensation(one);
+        TestTx.inHome(storage, () -> {
+            Repositories.compensation().appendCompensation(two);
+            Repositories.compensation().appendCompensation(one);
         });
 
-        List<CompLog> log = storage.inTx(tx -> tx.compensationLog(i.id));
+        List<CompLog> log = TestTx.inHome(storage, () -> Repositories.compensation().compensationLog(i.id));
         assertEquals(List.of(1L, 2L), log.stream().map(e -> e.seq).toList(),
                 "seq order, whatever order they were appended in: the reverse pass walks it backwards");
         CompLog back = log.getFirst();
@@ -1657,11 +1655,11 @@ abstract class StorageContract {
         assertEquals(doc("after", 1).json(), back.result.json());
         assertFalse(back.compensated);
 
-        storage.inTxVoid(tx -> tx.markCompensated(i.id, 2));
-        List<CompLog> settled = storage.inTx(tx -> tx.compensationLog(i.id));
+        TestTx.inHome(storage, () -> Repositories.compensation().markCompensated(i.id, 2));
+        List<CompLog> settled = TestTx.inHome(storage, () -> Repositories.compensation().compensationLog(i.id));
         assertFalse(settled.get(0).compensated, "only the entry named is settled");
         assertTrue(settled.get(1).compensated);
-        assertTrue(storage.inTx(tx -> tx.compensationLog(id("wfi"))).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.compensation().compensationLog(id("wfi"))).isEmpty());
     }
 
     private static CompLog compEntry(Instance of, long seq) {
@@ -1683,36 +1681,36 @@ abstract class StorageContract {
     void authAccounts() {
         String name = id("u");
         String role = id("r");
-        storage.inTx(tx -> {
-            tx.putAuthRole(new Rows.AuthRole(role, Set.of("read", "instance.cancel:orders"), false, now, now));
-            tx.putAuthUser(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now));
-            tx.setAuthRolesOf(name, List.of(role, "viewer-" + run));
+        TestTx.inHome(storage, () -> {
+            Repositories.auth().putAuthRole(new Rows.AuthRole(role, Set.of("read", "instance.cancel:orders"), false, now, now));
+            Repositories.auth().putAuthUser(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now));
+            Repositories.auth().setAuthRolesOf(name, List.of(role, "viewer-" + run));
             return null;
         });
-        Rows.AuthUser read = storage.inTx(tx -> tx.findAuthUser(name)).orElseThrow();
+        Rows.AuthUser read = TestTx.inHome(storage, () -> Repositories.auth().findAuthUser(name)).orElseThrow();
         assertEquals(new Rows.AuthUser(name, "h1", "s1", 10, false, now, now), read);
-        assertEquals(List.of(role, "viewer-" + run).stream().sorted().toList(), storage.inTx(tx -> tx.authRolesOf(name)));
-        Rows.AuthRole r = storage.inTx(tx -> tx.authRoles()).stream().filter(x -> x.name().equals(role)).findFirst()
+        assertEquals(List.of(role, "viewer-" + run).stream().sorted().toList(), TestTx.inHome(storage, () -> Repositories.auth().authRolesOf(name)));
+        Rows.AuthRole r = TestTx.inHome(storage, () -> Repositories.auth().authRoles()).stream().filter(x -> x.name().equals(role)).findFirst()
                 .orElseThrow();
         assertEquals(Set.of("read", "instance.cancel:orders"), r.permissions());
-        assertTrue(storage.inTx(tx -> tx.authUsers()).stream().anyMatch(u -> u.name().equals(name)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().authUsers()).stream().anyMatch(u -> u.name().equals(name)));
 
-        storage.inTx(tx -> {
-            tx.putAuthUser(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5));
-            tx.setAuthRolesOf(name, List.of(role));
+        TestTx.inHome(storage, () -> {
+            Repositories.auth().putAuthUser(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5));
+            Repositories.auth().setAuthRolesOf(name, List.of(role));
             return null;
         });
         assertEquals(new Rows.AuthUser(name, "h2", "s2", 20, true, now, now + 5),
-                storage.inTx(tx -> tx.findAuthUser(name)).orElseThrow(), "a put replaces the account");
-        assertEquals(List.of(role), storage.inTx(tx -> tx.authRolesOf(name)), "and roles are replaced, not added");
+                TestTx.inHome(storage, () -> Repositories.auth().findAuthUser(name)).orElseThrow(), "a put replaces the account");
+        assertEquals(List.of(role), TestTx.inHome(storage, () -> Repositories.auth().authRolesOf(name)), "and roles are replaced, not added");
 
         String session = id("sess");
-        storage.inTx(tx -> { tx.insertAuthSession(new Rows.AuthSession(session, name, now + 60_000, now)); return null; });
-        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthUser(name)));
-        assertTrue(storage.inTx(tx -> tx.findAuthUser(name)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.authRolesOf(name)).isEmpty(), "its grants go with it");
-        assertTrue(storage.inTx(tx -> tx.findAuthSession(session)).isEmpty(), "and its sessions");
-        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthUser(name)), "a second delete finds nothing");
+        TestTx.inHome(storage, () -> { Repositories.auth().insertAuthSession(new Rows.AuthSession(session, name, now + 60_000, now)); return null; });
+        assertTrue((boolean) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthUser(name)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthUser(name)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().authRolesOf(name)).isEmpty(), "its grants go with it");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(session)).isEmpty(), "and its sessions");
+        assertFalse((boolean) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthUser(name)), "a second delete finds nothing");
     }
 
     @Test
@@ -1721,17 +1719,17 @@ abstract class StorageContract {
         String name = id("u");
         String role = id("r");
         String other = id("r");
-        storage.inTx(tx -> {
-            tx.putAuthRole(new Rows.AuthRole(role, Set.of("read"), false, now, now));
-            tx.putAuthRole(new Rows.AuthRole(other, Set.of("*"), false, now, now));
-            tx.putAuthUser(new Rows.AuthUser(name, "h", "s", 1, false, now, now));
-            tx.setAuthRolesOf(name, List.of(role, other));
+        TestTx.inHome(storage, () -> {
+            Repositories.auth().putAuthRole(new Rows.AuthRole(role, Set.of("read"), false, now, now));
+            Repositories.auth().putAuthRole(new Rows.AuthRole(other, Set.of("*"), false, now, now));
+            Repositories.auth().putAuthUser(new Rows.AuthUser(name, "h", "s", 1, false, now, now));
+            Repositories.auth().setAuthRolesOf(name, List.of(role, other));
             return null;
         });
-        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthRole(role)));
-        assertEquals(List.of(other), storage.inTx(tx -> tx.authRolesOf(name)));
-        assertTrue(storage.inTx(tx -> tx.authRoles()).stream().noneMatch(r -> r.name().equals(role)));
-        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthRole(role)));
+        assertTrue((boolean) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthRole(role)));
+        assertEquals(List.of(other), TestTx.inHome(storage, () -> Repositories.auth().authRolesOf(name)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().authRoles()).stream().noneMatch(r -> r.name().equals(role)));
+        assertFalse((boolean) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthRole(role)));
     }
 
     @Test
@@ -1739,26 +1737,26 @@ abstract class StorageContract {
     void authSessions() {
         String name = id("u");
         String a = id("sa"), b = id("sb"), c = id("sc"), old = id("so");
-        storage.inTx(tx -> {
-            tx.insertAuthSession(new Rows.AuthSession(a, name, now + 60_000, now));
-            tx.insertAuthSession(new Rows.AuthSession(b, name, now + 60_000, now));
-            tx.insertAuthSession(new Rows.AuthSession(c, name, now + 60_000, now));
-            tx.insertAuthSession(new Rows.AuthSession(old, name, ANCIENT, ANCIENT));
+        TestTx.inHome(storage, () -> {
+            Repositories.auth().insertAuthSession(new Rows.AuthSession(a, name, now + 60_000, now));
+            Repositories.auth().insertAuthSession(new Rows.AuthSession(b, name, now + 60_000, now));
+            Repositories.auth().insertAuthSession(new Rows.AuthSession(c, name, now + 60_000, now));
+            Repositories.auth().insertAuthSession(new Rows.AuthSession(old, name, ANCIENT, ANCIENT));
             return null;
         });
-        assertEquals(new Rows.AuthSession(a, name, now + 60_000, now), storage.inTx(tx -> tx.findAuthSession(a)).orElseThrow());
-        storage.inTx(tx -> { tx.deleteAuthSession(a); return null; });
-        assertTrue(storage.inTx(tx -> tx.findAuthSession(a)).isEmpty());
+        assertEquals(new Rows.AuthSession(a, name, now + 60_000, now), TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(a)).orElseThrow());
+        TestTx.inHome(storage, () -> { Repositories.auth().deleteAuthSession(a); return null; });
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(a)).isEmpty());
 
-        int expired = storage.inTx(tx -> tx.deleteExpiredAuthSessions(ANCIENT + 1, 1000));
+        int expired = TestTx.inHome(storage, () -> Repositories.auth().deleteExpiredAuthSessions(ANCIENT + 1, 1000));
         assertTrue(expired >= 1);
-        assertTrue(storage.inTx(tx -> tx.findAuthSession(old)).isEmpty(), "an expired session is swept");
-        assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isPresent(), "a live one is not");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(old)).isEmpty(), "an expired session is swept");
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(b)).isPresent(), "a live one is not");
 
-        assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, c)));
-        assertTrue(storage.inTx(tx -> tx.findAuthSession(b)).isEmpty());
-        assertTrue(storage.inTx(tx -> tx.findAuthSession(c)).isPresent(), "the kept session stays");
-        assertEquals(1, (int) storage.inTx(tx -> tx.deleteAuthSessionsOf(name, null)), "null keeps none");
+        assertEquals(1, (int) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthSessionsOf(name, c)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(b)).isEmpty());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthSession(c)).isPresent(), "the kept session stays");
+        assertEquals(1, (int) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthSessionsOf(name, null)), "null keeps none");
     }
 
     @Test
@@ -1766,42 +1764,42 @@ abstract class StorageContract {
     void authCredentials() {
         String key = id("k"), cert = id("c");
         String hash = id("hash"), subject = "CN=" + id("subj");
-        storage.inTx(tx -> {
-            tx.insertAuthCredential(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
-            tx.insertAuthCredential(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5));
+        TestTx.inHome(storage, () -> {
+            Repositories.auth().insertAuthCredential(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
+            Repositories.auth().insertAuthCredential(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5));
             return null;
         });
         assertEquals(new Rows.AuthCredential(key, Rows.AuthCredential.API_KEY, hash, null, "admin", now, null),
-                storage.inTx(tx -> tx.findAuthCredentialByKeyHash(hash)).orElseThrow());
+                TestTx.inHome(storage, () -> Repositories.auth().findAuthCredentialByKeyHash(hash)).orElseThrow());
         assertEquals(new Rows.AuthCredential(cert, Rows.AuthCredential.MTLS, null, subject, "viewer", now, now + 5),
-                storage.inTx(tx -> tx.findAuthCredentialBySubject(subject)).orElseThrow());
-        assertTrue(storage.inTx(tx -> tx.authCredentials()).stream().map(Rows.AuthCredential::id).toList()
+                TestTx.inHome(storage, () -> Repositories.auth().findAuthCredentialBySubject(subject)).orElseThrow());
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().authCredentials()).stream().map(Rows.AuthCredential::id).toList()
                 .containsAll(List.of(key, cert)));
-        assertThrows(RuntimeException.class, () -> storage.inTx(tx -> {
-            tx.insertAuthCredential(new Rows.AuthCredential(id("k"), Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
+        assertThrows(RuntimeException.class, () -> TestTx.inHome(storage, () -> {
+            Repositories.auth().insertAuthCredential(new Rows.AuthCredential(id("k"), Rows.AuthCredential.API_KEY, hash, null, "admin", now, null));
             return null;
         }), "a key hash is unique");
-        assertTrue((boolean) storage.inTx(tx -> tx.deleteAuthCredential(key)));
-        assertTrue(storage.inTx(tx -> tx.findAuthCredentialByKeyHash(hash)).isEmpty());
-        assertFalse((boolean) storage.inTx(tx -> tx.deleteAuthCredential(key)));
-        storage.inTx(tx -> tx.deleteAuthCredential(cert));
+        assertTrue((boolean) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthCredential(key)));
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().findAuthCredentialByKeyHash(hash)).isEmpty());
+        assertFalse((boolean) TestTx.inHome(storage, () -> Repositories.auth().deleteAuthCredential(key)));
+        TestTx.inHome(storage, () -> Repositories.auth().deleteAuthCredential(cert));
     }
 
     @Test
     @DisplayName("the audit assigns increasing seqs and is read after a seq, in order")
     void authAudit() {
-        long head = storage.inTx(tx -> tx.authAuditHead());
+        long head = TestTx.inHome(storage, () -> Repositories.auth().authAuditHead());
         String action = id("act");
-        long first = storage.inTx(tx -> tx.appendAuthAudit(new Rows.AuthAudit(0, now, "dana", action, "rey", "x")));
-        long second = storage.inTx(tx -> tx.appendAuthAudit(new Rows.AuthAudit(0, now + 1, null, action, null, null)));
+        long first = TestTx.inHome(storage, () -> Repositories.auth().appendAuthAudit(new Rows.AuthAudit(0, now, "dana", action, "rey", "x")));
+        long second = TestTx.inHome(storage, () -> Repositories.auth().appendAuthAudit(new Rows.AuthAudit(0, now + 1, null, action, null, null)));
         assertTrue(first > head && second > first, head + " < " + first + " < " + second);
-        assertTrue(storage.inTx(tx -> tx.authAuditHead()) >= second);
-        List<Rows.AuthAudit> after = storage.inTx(tx -> tx.authAuditAfter(first - 1, 1000)).stream()
+        assertTrue(TestTx.inHome(storage, () -> Repositories.auth().authAuditHead()) >= second);
+        List<Rows.AuthAudit> after = TestTx.inHome(storage, () -> Repositories.auth().authAuditAfter(first - 1, 1000)).stream()
                 .filter(e -> e.action().equals(action)).toList();
         assertEquals(List.of(new Rows.AuthAudit(first, now, "dana", action, "rey", "x"),
                 new Rows.AuthAudit(second, now + 1, null, action, null, null)), after);
-        assertTrue((boolean) storage.inTx(tx -> tx.authAuditHas(action)));
-        assertFalse((boolean) storage.inTx(tx -> tx.authAuditHas(id("never"))));
+        assertTrue((boolean) TestTx.inHome(storage, () -> Repositories.auth().authAuditHas(action)));
+        assertFalse((boolean) TestTx.inHome(storage, () -> Repositories.auth().authAuditHas(id("never"))));
     }
 
     // -- WGL-SHARD-191/194: search documents on a search shard --
@@ -1815,16 +1813,16 @@ abstract class StorageContract {
     void searchDocUpsert() {
         String id = id("wfi");
         String word = "w" + run;
-        assertTrue((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " first", ANCIENT + 10))));
-        assertFalse((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " stale", ANCIENT + 5))),
+        assertTrue((boolean) TestTx.inHome(storage, () -> Repositories.search().upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " first", ANCIENT + 10))));
+        assertFalse((boolean) TestTx.inHome(storage, () -> Repositories.search().upsertSearchDoc(searchDoc(id, "wf", "RUNNING", word + " stale", ANCIENT + 5))),
                 "an older copy, delivered late, does not replace the newer one");
-        assertTrue((boolean) storage.inTx(tx -> tx.upsertSearchDoc(searchDoc(id, "wf", "COMPLETED", word + " second", ANCIENT + 20))));
-        List<Rows.SearchHit> hits = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10)));
+        assertTrue((boolean) TestTx.inHome(storage, () -> Repositories.search().upsertSearchDoc(searchDoc(id, "wf", "COMPLETED", word + " second", ANCIENT + 20))));
+        List<Rows.SearchHit> hits = TestTx.inHome(storage, () -> Repositories.search().searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10)));
         assertEquals(1, hits.size());
         assertEquals("COMPLETED", hits.getFirst().doc().status());
         assertTrue(hits.getFirst().doc().text().contains("second"));
-        storage.inTx(tx -> { tx.deleteSearchDoc(id); return null; });
-        assertTrue(storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10))).isEmpty());
+        TestTx.inHome(storage, () -> { Repositories.search().deleteSearchDoc(id); return null; });
+        assertTrue(TestTx.inHome(storage, () -> Repositories.search().searchDocs(new Rows.SearchQuery(word, null, null, null, null, 10))).isEmpty());
     }
 
     @Test
@@ -1833,13 +1831,13 @@ abstract class StorageContract {
         String word = "p" + run;
         String acmeOrders = id("wfi"), acmeBilling = id("wfi"), acme = id("wfi"), acmex = id("wfi"),
                 globex = id("wfi"), underscore = id("wfi");
-        storage.inTx(tx -> {
-            tx.upsertSearchDoc(searchDoc(acmeOrders, "acme.orders", "RUNNING", word, ANCIENT + 1));
-            tx.upsertSearchDoc(searchDoc(acmeBilling, "acme.billing", "RUNNING", word, ANCIENT + 2));
-            tx.upsertSearchDoc(searchDoc(acme, "acme", "RUNNING", word, ANCIENT + 3));
-            tx.upsertSearchDoc(searchDoc(acmex, "acmex.orders", "RUNNING", word, ANCIENT + 4));
-            tx.upsertSearchDoc(searchDoc(globex, "globex.orders", "RUNNING", word, ANCIENT + 5));
-            tx.upsertSearchDoc(searchDoc(underscore, "ac_e.orders", "RUNNING", word, ANCIENT + 6));
+        TestTx.inHome(storage, () -> {
+            Repositories.search().upsertSearchDoc(searchDoc(acmeOrders, "acme.orders", "RUNNING", word, ANCIENT + 1));
+            Repositories.search().upsertSearchDoc(searchDoc(acmeBilling, "acme.billing", "RUNNING", word, ANCIENT + 2));
+            Repositories.search().upsertSearchDoc(searchDoc(acme, "acme", "RUNNING", word, ANCIENT + 3));
+            Repositories.search().upsertSearchDoc(searchDoc(acmex, "acmex.orders", "RUNNING", word, ANCIENT + 4));
+            Repositories.search().upsertSearchDoc(searchDoc(globex, "globex.orders", "RUNNING", word, ANCIENT + 5));
+            Repositories.search().upsertSearchDoc(searchDoc(underscore, "ac_e.orders", "RUNNING", word, ANCIENT + 6));
             return null;
         });
         assertEquals(Set.of(acmeOrders, acmeBilling),
@@ -1856,14 +1854,14 @@ abstract class StorageContract {
     void searchDocMatching() {
         String a = "a" + run, b = "b" + run;
         String one = id("wfi"), many = id("wfi"), other = id("wfi"), onlyA = id("wfi");
-        storage.inTx(tx -> {
-            tx.upsertSearchDoc(searchDoc(one, "orders", "RUNNING", a + " " + b, ANCIENT + 1));
-            tx.upsertSearchDoc(searchDoc(many, "orders", "FAILED", a + " " + a + " " + a + " " + b + " " + b, ANCIENT + 2));
-            tx.upsertSearchDoc(searchDoc(other, "billing", "RUNNING", a + " " + b, ANCIENT + 3));
-            tx.upsertSearchDoc(searchDoc(onlyA, "orders", "RUNNING", "{\"note\":\"" + a + "\"}", ANCIENT + 4));
+        TestTx.inHome(storage, () -> {
+            Repositories.search().upsertSearchDoc(searchDoc(one, "orders", "RUNNING", a + " " + b, ANCIENT + 1));
+            Repositories.search().upsertSearchDoc(searchDoc(many, "orders", "FAILED", a + " " + a + " " + a + " " + b + " " + b, ANCIENT + 2));
+            Repositories.search().upsertSearchDoc(searchDoc(other, "billing", "RUNNING", a + " " + b, ANCIENT + 3));
+            Repositories.search().upsertSearchDoc(searchDoc(onlyA, "orders", "RUNNING", "{\"note\":\"" + a + "\"}", ANCIENT + 4));
             return null;
         });
-        List<String> both = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(a + " " + b, null, null, null, null, 10)))
+        List<String> both = TestTx.inHome(storage, () -> Repositories.search().searchDocs(new Rows.SearchQuery(a + " " + b, null, null, null, null, 10)))
                 .stream().map(h -> h.doc().instanceId()).toList();
         assertEquals(List.of(many, other, one), both, "both words needed; more occurrences first, then newest");
         assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).contains(onlyA),
@@ -1878,12 +1876,12 @@ abstract class StorageContract {
         assertEquals(List.of(onlyA, other), ids(new Rows.SearchQuery("", null, null, ANCIENT + 3, ANCIENT + 4, 10)),
                 "no words: newest first, by the filters alone");
 
-        assertTrue(storage.inTx(tx -> tx.deleteSearchDocsBefore(ANCIENT + 5, 1000)) >= 4);
+        assertTrue(TestTx.inHome(storage, () -> Repositories.search().deleteSearchDocsBefore(ANCIENT + 5, 1000)) >= 4);
         assertTrue(ids(new Rows.SearchQuery(a, null, null, null, null, 10)).isEmpty(), "retention deletes by updatedAt");
     }
 
     private List<String> ids(Rows.SearchQuery q) {
-        return storage.inTx(tx -> tx.searchDocs(q)).stream().map(h -> h.doc().instanceId()).toList();
+        return TestTx.inHome(storage, () -> Repositories.search().searchDocs(q)).stream().map(h -> h.doc().instanceId()).toList();
     }
 
     @Test
@@ -1891,14 +1889,14 @@ abstract class StorageContract {
     void searchDocPaging() {
         String prefix = "zz-" + run + "-";
         List<String> mine = List.of(prefix + "1", prefix + "2", prefix + "3");
-        storage.inTx(tx -> {
-            mine.forEach(id -> tx.upsertSearchDoc(searchDoc(id, "wf", "RUNNING", "x", ANCIENT)));
+        TestTx.inHome(storage, () -> {
+            mine.forEach(id -> Repositories.search().upsertSearchDoc(searchDoc(id, "wf", "RUNNING", "x", ANCIENT)));
             return null;
         });
-        List<Rows.SearchDoc> page = storage.inTx(tx -> tx.searchDocsAfter(prefix, 2));
+        List<Rows.SearchDoc> page = TestTx.inHome(storage, () -> Repositories.search().searchDocsAfter(prefix, 2));
         assertEquals(List.of(prefix + "1", prefix + "2"), page.stream().map(Rows.SearchDoc::instanceId).toList());
-        assertEquals(prefix + "3", storage.inTx(tx -> tx.searchDocsAfter(prefix + "2", 1)).getFirst().instanceId());
-        storage.inTx(tx -> { mine.forEach(tx::deleteSearchDoc); return null; });
+        assertEquals(prefix + "3", TestTx.inHome(storage, () -> Repositories.search().searchDocsAfter(prefix + "2", 1)).getFirst().instanceId());
+        TestTx.inHome(storage, () -> mine.forEach(Repositories.search()::deleteSearchDoc));
     }
 
     private Rows.SearchDoc attrDoc(String id, String workflow, long updatedAt, Map<String, Object> attributes) {
@@ -1906,7 +1904,7 @@ abstract class StorageContract {
     }
 
     private List<String> attrSearch(String workflow, Rows.AttrFilter... filters) {
-        return storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(null, Scope.of(workflow), null, null, null, 100,
+        return TestTx.inHome(storage, () -> Repositories.search().searchDocs(new Rows.SearchQuery(null, Scope.of(workflow), null, null, null, 100,
                         List.of(filters))))
                 .stream().map(h -> h.doc().instanceId()).sorted().toList();
     }
@@ -1916,19 +1914,19 @@ abstract class StorageContract {
     void searchByAttributes() {
         String wf = "attrs-" + run;
         String eu = id("wfi"), us = id("wfi"), bare = id("wfi"), typed = id("wfi"), other = id("wfi");
-        storage.inTx(tx -> {
-            tx.upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 1, Map.of("region", "EU", "total", 120L, "vip", true,
+        TestTx.inHome(storage, () -> {
+            Repositories.search().upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 1, Map.of("region", "EU", "total", 120L, "vip", true,
                     "rate", new java.math.BigDecimal("0.25"))));
-            tx.upsertSearchDoc(attrDoc(us, wf, ANCIENT + 2, Map.of("region", "US", "total", 80L, "vip", false,
+            Repositories.search().upsertSearchDoc(attrDoc(us, wf, ANCIENT + 2, Map.of("region", "US", "total", 80L, "vip", false,
                     "rate", new java.math.BigDecimal("1.5"))));
-            tx.upsertSearchDoc(attrDoc(bare, wf, ANCIENT + 3, Map.of()));
-            tx.upsertSearchDoc(attrDoc(typed, wf, ANCIENT + 4, Map.of("region", 7L)));
-            tx.upsertSearchDoc(attrDoc(other, wf + "-2", ANCIENT + 5, Map.of("region", "EU")));
+            Repositories.search().upsertSearchDoc(attrDoc(bare, wf, ANCIENT + 3, Map.of()));
+            Repositories.search().upsertSearchDoc(attrDoc(typed, wf, ANCIENT + 4, Map.of("region", 7L)));
+            Repositories.search().upsertSearchDoc(attrDoc(other, wf + "-2", ANCIENT + 5, Map.of("region", "EU")));
             return null;
         });
         Rows.AttrFilter region = new Rows.AttrFilter("region", Op.EQUAL, "EU");
         assertEquals(List.of(eu), attrSearch(wf, region), "text equality, in this flow only");
-        Rows.SearchDoc found = storage.inTx(tx -> tx.searchDocs(new Rows.SearchQuery(null, Scope.of(wf), null, null, null,
+        Rows.SearchDoc found = TestTx.inHome(storage, () -> Repositories.search().searchDocs(new Rows.SearchQuery(null, Scope.of(wf), null, null, null,
                 100, List.of(region)))).getFirst().doc();
         assertEquals(Map.of("region", "EU", "total", 120L, "vip", true, "rate", new java.math.BigDecimal("0.25")),
                 found.attributes(), "a hit carries the attributes it was indexed with");
@@ -1949,29 +1947,29 @@ abstract class StorageContract {
         assertEquals(List.of(typed), attrSearch(wf, new Rows.AttrFilter("region", Op.EQUAL, 7L)),
                 "an attribute held as another type does not match a text filter, and the reverse");
 
-        storage.inTx(tx -> {
-            tx.upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 10, Map.of("region", "US")));
+        TestTx.inHome(storage, () -> {
+            Repositories.search().upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 10, Map.of("region", "US")));
             return null;
         });
         assertEquals(List.of(eu, us).stream().sorted().toList(), attrSearch(wf, new Rows.AttrFilter("region", Op.EQUAL, "US")),
                 "a newer document replaces its attributes");
         assertEquals(List.of(), attrSearch(wf, new Rows.AttrFilter("total", Op.GREATER_THAN, 100L)), "including the ones it no longer has");
-        storage.inTx(tx -> {
-            tx.upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 5, Map.of("region", "EU")));
+        TestTx.inHome(storage, () -> {
+            Repositories.search().upsertSearchDoc(attrDoc(eu, wf, ANCIENT + 5, Map.of("region", "EU")));
             return null;
         });
         assertEquals(List.of(), attrSearch(wf, region), "an older document does not bring its attributes back");
 
-        Map<String, Object> held = storage.inTx(tx -> tx.searchDocsAfter(us.substring(0, us.length() - 1), 100)).stream()
+        Map<String, Object> held = TestTx.inHome(storage, () -> Repositories.search().searchDocsAfter(us.substring(0, us.length() - 1), 100)).stream()
                 .filter(d -> d.instanceId().equals(us)).findFirst().orElseThrow().attributes();
         assertEquals("US", held.get("region"));
         assertEquals(80L, ((Number) held.get("total")).longValue());
         assertEquals(false, held.get("vip"));
         assertEquals(0, new java.math.BigDecimal("1.5").compareTo(new java.math.BigDecimal(held.get("rate").toString())));
 
-        storage.inTx(tx -> { tx.deleteSearchDoc(us); return null; });
+        TestTx.inHome(storage, () -> { Repositories.search().deleteSearchDoc(us); return null; });
         assertEquals(List.of(), attrSearch(wf, new Rows.AttrFilter("total", Op.LESS_THAN, 100L)), "a document takes its attributes with it");
-        storage.inTx(tx -> { List.of(eu, bare, typed, other).forEach(tx::deleteSearchDoc); return null; });
+        TestTx.inHome(storage, () -> List.of(eu, bare, typed, other).forEach(Repositories.search()::deleteSearchDoc));
     }
 
     // -- WGL-STOR-005: the store's own identity --

@@ -64,18 +64,18 @@ final class Transactions {
 
     /** Runs {@code body} on the shard holding {@code id}, then (post-commit) wakes pollers for any
      *  queue it marked. */
-    <T> T inTx(String id, Supplier<T> body) {
+    <T> T forInstance(String id, Supplier<T> body) {
         return inShard(shards.shardOf(id), body);
     }
 
-    void inTxVoid(String id, Runnable body) {
-        inTx(id, () -> {
+    void forInstance(String id, Runnable body) {
+        forInstance(id, () -> {
             body.run();
             return null;
         });
     }
 
-    /** {@link #inTx(String, Supplier)} on the home shard. */
+    /** {@link #forInstance(String, Supplier)} on the home shard. */
     <T> T inHome(Supplier<T> body) {
         return inShard(shards.home(), body);
     }

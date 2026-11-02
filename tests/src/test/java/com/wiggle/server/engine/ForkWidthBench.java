@@ -1,21 +1,20 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.tests.Reports;
 import com.wiggle.core.Node;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.PayloadCodec;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
+import com.wiggle.tests.WatchedRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
-import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,7 +34,7 @@ import java.util.function.Function;
  * the pre-fork view.
  *
  * <p>Counted, not timed: the proxy below records what the engine ASKS the store for, which is the
- * same on every backend. Wall-clock would only measure the in-memory store's map lookups and would
+ * same on every backend. Wall-clock on H2 in memory would
  * say nothing about the JSON parse a real database pays. Bytes are computed by re-encoding what was
  * handed back, which is exactly what a JDBC row mapper decodes.
  *
@@ -81,7 +80,7 @@ class ForkWidthBench {
     /** Drives one fork/join instance of the given width to completion, counting store reads. */
     private static Tally run(int width) {
         AtomicLong calls = new AtomicLong(), rows = new AtomicLong(), bytes = new AtomicLong();
-        try (Storage raw = new InMemoryStorage()) {
+        try (Storage raw = PostgresStorageFactory.inMemory()) {
             raw.migrate();
             Storage counting = new Counting(raw, calls, rows, bytes);
             DefinitionRegistry registry = new DefinitionRegistry(counting);
@@ -100,34 +99,30 @@ class ForkWidthBench {
         return new Tally(width, calls.get(), rows.get(), bytes.get());
     }
 
-    /** A Storage whose every transaction hands out a counting {@link Tx}. */
+    /** A Storage whose every transaction hands out counting repositories. */
     private record Counting(Storage delegate, AtomicLong calls, AtomicLong rows, AtomicLong bytes)
             implements Storage {
 
         @Override public void migrate() { delegate.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
-            return delegate.inTx(tx -> work.apply(watch(tx, calls, rows, bytes)));
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
+            return delegate.inShard(shard, r -> work.apply(watch(r, calls, rows, bytes)));
         }
 
         @Override public void close() { delegate.close(); }
     }
 
-    private static Tx watch(Tx delegate, AtomicLong calls, AtomicLong rows, AtomicLong bytes) {
-        InvocationHandler h = (proxy, method, args) -> {
-            Object out = method.invoke(delegate, args);
-            if (method.getName().equals("tokensOf")) {
-                calls.incrementAndGet();
-                @SuppressWarnings("unchecked") List<Token> ts = (List<Token>) out;
-                rows.addAndGet(ts.size());
-                for (Token t : ts) {
-                    String encoded = PayloadCodec.encode(t.payload);
-                    if (encoded != null) bytes.addAndGet(encoded.length());
-                }
+    private static WriteRepositories watch(WriteRepositories delegate, AtomicLong calls, AtomicLong rows, AtomicLong bytes) {
+        return WatchedRepositories.watch(delegate, (method, args, out) -> {
+            if (!method.getName().equals("tokensOf")) return;
+            calls.incrementAndGet();
+            @SuppressWarnings("unchecked") List<Token> ts = (List<Token>) out;
+            rows.addAndGet(ts.size());
+            for (Token t : ts) {
+                String encoded = PayloadCodec.encode(t.payload);
+                if (encoded != null) bytes.addAndGet(encoded.length());
             }
-            return out;
-        };
-        return (Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(), new Class<?>[]{Tx.class}, h);
+        });
     }
 
     /** fork -> width branches, each one task -> join -> end. No combine: this measures the barrier. */

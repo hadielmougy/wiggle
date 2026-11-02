@@ -11,11 +11,11 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.testfixtures.TestPorts;
@@ -228,7 +228,7 @@ class DynamicConstructsTest {
 
     @Test @DisplayName("forEach: a fan-out wider than the drive depth cap expands in one drive")
     void fanOutWiderThanDriveCap() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);

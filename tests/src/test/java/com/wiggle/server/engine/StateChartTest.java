@@ -1,12 +1,14 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.InstanceView;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Storage;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -190,16 +192,16 @@ class StateChartTest {
     }
 
     /**
-     * The terminal rule is written down three times -- InstanceView, the JDBC purge query and the
-     * in-memory purge. This pins the in-memory copy to the chart behaviourally, so a new status
-     * that nobody classified is purged (or kept) loudly rather than silently.
+     * The terminal rule is written down twice -- InstanceView and the purge query. This pins the
+     * query to the chart behaviourally, so a new status that nobody classified is purged (or kept)
+     * loudly rather than silently.
      */
     @Test
-    @DisplayName("the in-memory purge treats exactly the chart's terminal states as terminal")
-    void inMemoryPurgeAgreesWithTheChart() {
-        Storage storage = new InMemoryStorage();
+    @DisplayName("the purge treats exactly the chart's terminal states as terminal")
+    void purgeAgreesWithTheChart() {
+        Storage storage = PostgresStorageFactory.inMemory();
         for (InstanceStatus s : InstanceStatus.values()) {
-            storage.inTxVoid(tx -> {
+            TestTx.inHome(storage, () -> {
                 Instance i = new Instance();
                 i.id = "wfi_" + s.name();
                 i.workflow = "w";
@@ -207,15 +209,15 @@ class StateChartTest {
                 i.status = s;
                 i.createdAt = 0;
                 i.updatedAt = 0;
-                tx.insertInstance(i);
+                Repositories.instances().insertInstance(i);
             });
         }
-        storage.inTxVoid(tx -> tx.deleteTerminalInstancesBefore(1_000, 100));
+        TestTx.inHome(storage, () -> Repositories.instances().deleteTerminalInstancesBefore(1_000, 100));
         Set<String> survived = Arrays.stream(InstanceStatus.values())
-                .filter(s -> storage.inTx(tx -> tx.findInstance("wfi_" + s.name()).isPresent()))
+                .filter(s -> TestTx.inHome(storage, () -> Repositories.instances().findInstance("wfi_" + s.name()).isPresent()))
                 .map(Enum::name).collect(Collectors.toCollection(LinkedHashSet::new));
         assertEquals(kind(StateChart.instances(), "live"), survived,
-                "the in-memory purge and the chart disagree about which states are terminal");
+                "the purge and the chart disagree about which states are terminal");
     }
 
     @Test

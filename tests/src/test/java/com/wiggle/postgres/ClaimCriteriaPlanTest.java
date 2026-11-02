@@ -6,8 +6,10 @@ import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.store.ClaimFilter;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -182,8 +184,8 @@ class ClaimCriteriaPlanTest {
     private List<Token> claim(ClaimFilter filter) {
         long now = System.currentTimeMillis();
         try {
-            storage.inTx(tx -> {
-                throw new Rolled(tx.claimTasks("plan", filter, MAX, now, now + 60_000));
+            TestTx.inHome(storage, () -> {
+                throw new Rolled(Repositories.tokens().claimTasks("plan", filter, MAX, now, now + 60_000));
             });
         } catch (RuntimeException e) {
             for (Throwable x = e; x != null; x = x.getCause()) if (x instanceof Rolled r) return r.claimed;

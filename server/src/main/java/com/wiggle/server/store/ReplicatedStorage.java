@@ -83,22 +83,22 @@ public final class ReplicatedStorage implements Storage {
     /** Migrates the primary and claims it for this shard, so its heartbeat row exists. */
     @Override public void migrate() {
         primary.migrate();
-        primary.inTx(tx -> {
-            tx.claimShardIdentity(shard);
+        primary.inShard(shard, r -> {
+            r.shards().claimShardIdentity(shard);
             return null;
         });
     }
 
-    @Override public <R> R inTx(Function<Tx, R> work) {
-        return primary.inTx(work);
+    @Override public <R> R inShard(int shard, Function<WriteRepositories, R> body) {
+        return primary.inShard(shard, body);
     }
 
-    @Override public <R> R readShard(int shard, Freshness freshness, Function<ReadTx, R> work) {
-        if (freshness == Freshness.PRIMARY || replicas.isEmpty()) return primary.inTx(work::apply);
+    @Override public <R> R readShard(int shard, Freshness freshness, Function<ReadRepositories, R> body) {
+        if (freshness == Freshness.PRIMARY || replicas.isEmpty()) return primary.readShard(shard, Freshness.PRIMARY, body);
         Replica r = pick();
         if (r != null) {
             try {
-                return r.store.inTx(work::apply);
+                return r.store.readShard(shard, Freshness.PRIMARY, body);
             } catch (RuntimeException e) {
                 eject(r, clock.getAsLong(), e);
             }
@@ -108,7 +108,7 @@ public final class ReplicatedStorage implements Storage {
                     + maxLagMillis + " ms; replica reads are not served from the primary", null,
                     StorageException.Classification.TRANSIENT);
         }
-        return primary.inTx(work::apply);
+        return primary.readShard(shard, Freshness.PRIMARY, body);
     }
 
     /** The next healthy replica in turn, or null when none is. */
@@ -127,8 +127,8 @@ public final class ReplicatedStorage implements Storage {
     }
 
     @Override public void beatPrimaries(long now) {
-        primary.inTx(tx -> {
-            tx.writeShardBeat(now);
+        primary.inShard(shard, r -> {
+            r.shards().writeShardBeat(now);
             return null;
         });
     }
@@ -137,7 +137,7 @@ public final class ReplicatedStorage implements Storage {
         for (Replica r : replicas) {
             if (now < r.nextProbeAt) continue;
             try {
-                OptionalLong beat = r.store.inTx(tx -> tx.shardBeat());
+                OptionalLong beat = r.store.readShard(shard, Freshness.PRIMARY, repositories -> repositories.shards().shardBeat());
                 long lag = beat.isPresent() ? Math.max(0, now - beat.getAsLong()) : -1;
                 boolean healthy = lag >= 0 && lag <= maxLagMillis;
                 if (healthy != r.healthy) {

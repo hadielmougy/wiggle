@@ -10,6 +10,7 @@ import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.PayloadCodec;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.TokenPayload;
 import org.junit.jupiter.api.DisplayName;
@@ -73,7 +74,7 @@ class JdbcTokenWritesTest {
     }
 
     private static boolean renew(JdbcStorage storage, String id, String owner, long until, long now) {
-        Boolean renewed = storage.inTx(tx -> tx.renewLease(id, owner, until, now));
+        Boolean renewed = TestTx.inHome(storage, () -> Repositories.tokens().renewLease(id, owner, until, now));
         return renewed;
     }
 
@@ -102,18 +103,18 @@ class JdbcTokenWritesTest {
     void unchangedPayloadIsNotRewritten(Db db) throws Exception {
         try (JdbcStorage storage = db.open()) {
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
             plant(db, t.id);
 
-            storage.inTxVoid(tx -> {
-                Token live = tx.findToken(t.id).orElseThrow();
+            TestTx.inHome(storage, () -> {
+                Token live = Repositories.tokens().findToken(t.id).orElseThrow();
                 live.status = TokenStatus.DONE;
                 live.updatedAt = 2;
-                tx.updateToken(live);
+                Repositories.tokens().updateToken(live);
             });
 
             assertEquals(PLANTED, storedPayload(db, t.id), "the payload column was not written");
-            Token back = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+            Token back = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
             assertEquals(TokenStatus.DONE, back.status, "the other columns were");
         }
     }
@@ -123,11 +124,11 @@ class JdbcTokenWritesTest {
     void rowFromAnotherTransactionIsWrittenWhole(Db db) throws Exception {
         try (JdbcStorage storage = db.open()) {
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
             plant(db, t.id);
 
             t.status = TokenStatus.DONE;
-            storage.inTxVoid(tx -> tx.updateToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().updateToken(t));
 
             assertEquals(t.payload, storedPayload(db, t.id), "the record from the insert's transaction is not trusted");
         }
@@ -138,20 +139,20 @@ class JdbcTokenWritesTest {
     void payloadFromRolledBackTransactionIsRewritten(Db db) throws Exception {
         try (JdbcStorage storage = db.open()) {
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
             TokenPayload next = TokenPayload.EMPTY.withLoopCount("loop", 9);
             AtomicReference<Token> carried = new AtomicReference<>();
 
-            assertThrows(IllegalStateException.class, () -> storage.inTxVoid(tx -> {
-                Token live = tx.findToken(t.id).orElseThrow();
+            assertThrows(IllegalStateException.class, () -> TestTx.inHome(storage, () -> {
+                Token live = Repositories.tokens().findToken(t.id).orElseThrow();
                 live.payload = next;
-                tx.updateToken(live);
+                Repositories.tokens().updateToken(live);
                 carried.set(live);
                 throw new IllegalStateException("roll back");
             }));
             assertEquals(TokenPayload.EMPTY, storedPayload(db, t.id), "the rolled-back write did not land");
 
-            storage.inTxVoid(tx -> tx.updateToken(carried.get()));
+            TestTx.inHome(storage, () -> Repositories.tokens().updateToken(carried.get()));
             assertEquals(next, storedPayload(db, t.id), "the next transaction wrote the payload");
         }
     }
@@ -161,12 +162,12 @@ class JdbcTokenWritesTest {
     void changedPayloadIsWritten(Db db) throws Exception {
         try (JdbcStorage storage = db.open()) {
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
             plant(db, t.id);
 
             TokenPayload next = TokenPayload.EMPTY.withLoopCount("loop", 3);
             t.payload = next;
-            storage.inTxVoid(tx -> tx.updateToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().updateToken(t));
 
             assertEquals(next, storedPayload(db, t.id));
         }
@@ -178,23 +179,23 @@ class JdbcTokenWritesTest {
         try (JdbcStorage storage = db.open()) {
             Token kept = running("w1");
             Token changed = running("w1");
-            storage.inTxVoid(tx -> tx.insertTokens(List.of(kept, changed)));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertTokens(List.of(kept, changed)));
             plant(db, kept.id);
             plant(db, changed.id);
 
             TokenPayload next = TokenPayload.EMPTY.withLoopCount("loop", 5);
-            storage.inTxVoid(tx -> {
-                Token k = tx.findToken(kept.id).orElseThrow();
-                Token c = tx.findToken(changed.id).orElseThrow();
+            TestTx.inHome(storage, () -> {
+                Token k = Repositories.tokens().findToken(kept.id).orElseThrow();
+                Token c = Repositories.tokens().findToken(changed.id).orElseThrow();
                 k.status = TokenStatus.DONE;
                 c.status = TokenStatus.DONE;
                 c.payload = next;
-                tx.updateTokens(List.of(k, c));
+                Repositories.tokens().updateTokens(List.of(k, c));
             });
 
             assertEquals(PLANTED, storedPayload(db, kept.id), "read then updated untouched: not rewritten");
             assertEquals(next, storedPayload(db, changed.id));
-            assertEquals(TokenStatus.DONE, storage.inTx(tx -> tx.findToken(kept.id)).orElseThrow().status);
+            assertEquals(TokenStatus.DONE, TestTx.inHome(storage, () -> Repositories.tokens().findToken(kept.id)).orElseThrow().status);
         }
     }
 
@@ -203,18 +204,18 @@ class JdbcTokenWritesTest {
     void batchWithRepeatedRowKeepsOrder(Db db) {
         try (JdbcStorage storage = db.open()) {
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
 
-            storage.inTxVoid(tx -> {
-                Token first = tx.findToken(t.id).orElseThrow();
-                Token second = tx.findToken(t.id).orElseThrow();
+            TestTx.inHome(storage, () -> {
+                Token first = Repositories.tokens().findToken(t.id).orElseThrow();
+                Token second = Repositories.tokens().findToken(t.id).orElseThrow();
                 first.payload = TokenPayload.EMPTY.withLoopCount("loop", 1);
                 first.status = TokenStatus.READY;
                 second.status = TokenStatus.DONE;
-                tx.updateTokens(List.of(first, second));
+                Repositories.tokens().updateTokens(List.of(first, second));
             });
 
-            assertEquals(TokenStatus.DONE, storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().status,
+            assertEquals(TokenStatus.DONE, TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow().status,
                     "the later write of the row wins");
         }
     }
@@ -224,7 +225,7 @@ class JdbcTokenWritesTest {
     void renewLeaseIsNarrow(Db db) throws Exception {
         try (JdbcStorage storage = db.open()) {
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
             plant(db, t.id);
 
             assertFalse(renew(storage, t.id, "w2", 9_000, 5), "another worker's lease");
@@ -232,14 +233,14 @@ class JdbcTokenWritesTest {
             assertTrue(renew(storage, t.id, "w1", 9_000, 5));
             assertTrue(renew(storage, t.id, null, 9_500, 6), "a null owner matches any holder");
 
-            Token back = storage.inTx(tx -> tx.findToken(t.id)).orElseThrow();
+            Token back = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow();
             assertEquals(9_500, back.leaseExpiresAt);
             assertEquals(6, back.updatedAt);
             assertEquals("w1", back.leaseOwner);
             assertEquals(PLANTED, storedPayload(db, t.id), "the payload column was not written");
 
             back.status = TokenStatus.DONE;
-            storage.inTxVoid(tx -> tx.updateToken(back));
+            TestTx.inHome(storage, () -> Repositories.tokens().updateToken(back));
             assertFalse(renew(storage, t.id, "w1", 10_000, 7), "a settled token");
         }
     }
@@ -250,11 +251,11 @@ class JdbcTokenWritesTest {
         try (JdbcStorage storage = db.open()) {
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
             Token t = running("w1");
-            storage.inTxVoid(tx -> tx.insertToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertToken(t));
 
             long until = engine.extendLease(t.id, "w1", 60_000);
             assertTrue(until > System.currentTimeMillis());
-            assertEquals(until, storage.inTx(tx -> tx.findToken(t.id)).orElseThrow().leaseExpiresAt);
+            assertEquals(until, TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).orElseThrow().leaseExpiresAt);
 
             assertEquals(404, assertThrows(EngineException.class,
                     () -> engine.extendLease("tok-missing", "w1", 1_000)).statusCode());
@@ -262,7 +263,7 @@ class JdbcTokenWritesTest {
                     () -> engine.extendLease(t.id, "w2", 1_000)).statusCode());
 
             t.status = TokenStatus.DONE;
-            storage.inTxVoid(tx -> tx.updateToken(t));
+            TestTx.inHome(storage, () -> Repositories.tokens().updateToken(t));
             assertEquals(409, assertThrows(EngineException.class,
                     () -> engine.extendLease(t.id, "w1", 1_000)).statusCode());
         }

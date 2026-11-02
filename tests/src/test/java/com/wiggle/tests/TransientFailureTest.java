@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
 import com.wiggle.postgres.PostgresDialect;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
@@ -70,7 +71,7 @@ class TransientFailureTest {
     }
 
     private static Optional<String> definition(Storage storage, String name) {
-        return storage.inTx(tx -> tx.definition(name, 1));
+        return TestTx.inHome(storage, () -> Repositories.graph().definition(name, 1));
     }
 
     @Test @DisplayName("a transaction that rolled back on a transient failure is replayed, and its writes are gone")
@@ -79,13 +80,13 @@ class TransientFailureTest {
         String kept = unique("kept");
         try (Storage storage = storage("retry", 3)) {
             AtomicInteger attempts = new AtomicInteger();
-            String written = storage.inTx(tx -> {
+            String written = TestTx.inHome(storage, () -> {
                 // The first attempt writes, then dies: the replay must not see this row.
                 if (attempts.incrementAndGet() == 1) {
-                    tx.putDefinition(doomed, 1, "{}", "fp", "sha-256");
+                    Repositories.graph().putDefinition(doomed, 1, "{}", "fp", "sha-256");
                     throw serializationFailure();
                 }
-                tx.putDefinition(kept, 1, "{}", "fp", "sha-256");
+                Repositories.graph().putDefinition(kept, 1, "{}", "fp", "sha-256");
                 return kept;
             });
 
@@ -102,7 +103,7 @@ class TransientFailureTest {
         try (Storage storage = storage("no-retry", 3)) {
             AtomicInteger attempts = new AtomicInteger();
             RuntimeException thrown = syntaxError();
-            Supplier<String> run = () -> storage.inTx(tx -> {
+            Supplier<String> run = () -> TestTx.inHome(storage, () -> {
                 attempts.incrementAndGet();
                 throw thrown;
             });
@@ -117,7 +118,7 @@ class TransientFailureTest {
     void exhaustedReplaysSayNothingWasApplied() {
         try (Storage storage = storage("exhausted", 3)) {
             AtomicInteger attempts = new AtomicInteger();
-            Supplier<String> run = () -> storage.inTx(tx -> {
+            Supplier<String> run = () -> TestTx.inHome(storage, () -> {
                 attempts.incrementAndGet();
                 throw serializationFailure();
             });
@@ -133,7 +134,7 @@ class TransientFailureTest {
     void replayCanBeTurnedOff() {
         try (Storage storage = storage("single", 1)) {
             AtomicInteger attempts = new AtomicInteger();
-            Supplier<String> run = () -> storage.inTx(tx -> {
+            Supplier<String> run = () -> TestTx.inHome(storage, () -> {
                 attempts.incrementAndGet();
                 throw serializationFailure();
             });

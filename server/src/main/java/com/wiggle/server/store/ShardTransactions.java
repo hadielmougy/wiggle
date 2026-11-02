@@ -42,7 +42,7 @@ public final class ShardTransactions {
             throw new IllegalStateException("a write transaction on shard " + shard + " inside one on shard "
                     + outer.shard() + " would commit on its own; finish the first before opening the second");
         }
-        return storage.inShard(shard, tx -> CurrentTx.bind(tx, shard, true, body));
+        return storage.inShard(shard, repositories -> CurrentTx.bind(repositories, shard, true, body));
     }
 
     public void inShard(int shard, Runnable body) {
@@ -68,7 +68,7 @@ public final class ShardTransactions {
     public <R> R read(int shard, Freshness freshness, Supplier<R> body) {
         CurrentTx.Scope outer = CurrentTx.current();
         if (outer != null && outer.shard() == shard) return body.get();
-        return storage.readShard(shard, freshness, tx -> CurrentTx.bind(tx, shard, false, body));
+        return storage.readShard(shard, freshness, repositories -> CurrentTx.bind(repositories, shard, false, body));
     }
 
     /** {@link #read} on the primary of {@code shard}. */

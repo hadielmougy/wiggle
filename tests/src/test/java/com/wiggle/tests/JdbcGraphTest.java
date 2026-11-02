@@ -5,6 +5,7 @@ import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,13 +59,13 @@ class JdbcGraphTest {
             insertLegacyNode(url, "trip", 1, "merge", "[\"air\",\"hotel\"]");
             insertLegacyNode(url, "trip", 1, "collect", "\"__forEach__items\"");
 
-            storage.inTxVoid(tx -> {
-                Node fork = tx.graphNode("trip", 1, "merge").orElseThrow();
+            TestTx.inHome(storage, () -> {
+                Node fork = Repositories.graph().graphNode("trip", 1, "merge").orElseThrow();
                 assertEquals(List.of("air", "hotel"), fork.armNames(), "arm names decoded from items_key");
                 assertNull(fork.collectKey());
                 assertTrue(fork.isCombine());
 
-                Node each = tx.graphNode("trip", 1, "collect").orElseThrow();
+                Node each = Repositories.graph().graphNode("trip", 1, "collect").orElseThrow();
                 assertEquals("__forEach__items", each.collectKey(), "collect key decoded from items_key");
                 assertTrue(each.armNames().isEmpty());
                 assertTrue(each.isCombine());
@@ -92,41 +93,41 @@ class JdbcGraphTest {
                 "jdbc:h2:mem:graph-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2,
                 new H2Dialect())) {
             storage.migrate();
-            storage.inTxVoid(tx -> tx.putGraph(def));
+            TestTx.inHome(storage, () -> Repositories.graph().putGraph(def));
 
-            storage.inTxVoid(tx -> {
-                assertEquals("t", tx.graphStartNode("sample", def.version()).orElseThrow());
+            TestTx.inHome(storage, () -> {
+                assertEquals("t", Repositories.graph().graphStartNode("sample", def.version()).orElseThrow());
 
                 // Every node comes back byte-for-byte equal to what went in, edges included.
                 for (Node original : def.nodes().values()) {
-                    Node loaded = tx.graphNode("sample", def.version(), original.id())
+                    Node loaded = Repositories.graph().graphNode("sample", def.version(), original.id())
                             .orElseThrow(() -> new AssertionError("missing node " + original.id()));
                     assertEquals(original, loaded, "node " + original.id() + " did not round-trip");
                 }
 
                 // Spot-check the typed edge reconstruction directly.
-                Node p = tx.graphNode("sample", def.version(), "p").orElseThrow();
+                Node p = Repositories.graph().graphNode("sample", def.version(), "p").orElseThrow();
                 assertEquals("fk", p.next());
                 assertEquals("bad", p.altNext());
-                Node fk = tx.graphNode("sample", def.version(), "fk").orElseThrow();
+                Node fk = Repositories.graph().graphNode("sample", def.version(), "fk").orElseThrow();
                 assertEquals(List.of("b1", "b2"), fk.branches());
-                Node ut = tx.graphNode("sample", def.version(), "ut").orElseThrow();
+                Node ut = Repositories.graph().graphNode("sample", def.version(), "ut").orElseThrow();
                 assertEquals("df", ut.next(), "signal delivery path");
                 assertEquals("bad", ut.altNext(), "signal escalation path");
                 assertEquals(1000, ut.sleepMillis(), "signal deadline");
-                Node df = tx.graphNode("sample", def.version(), "df").orElseThrow();
+                Node df = Repositories.graph().graphNode("sample", def.version(), "df").orElseThrow();
                 assertEquals(List.of("db"), df.branches(), "dynamic fork branch template");
                 assertEquals("djn", df.next(), "dynamic fork's paired join");
                 assertEquals("items", df.itemsKey());
                 assertEquals("item", df.itemKey());
 
-                assertTrue(tx.graphNode("sample", def.version(), "nope").isEmpty());
-                assertTrue(tx.graphNode("sample", def.version(), "t").orElseThrow().compensable(),
+                assertTrue(Repositories.graph().graphNode("sample", def.version(), "nope").isEmpty());
+                assertTrue(Repositories.graph().graphNode("sample", def.version(), "t").orElseThrow().compensable(),
                         "compensable flag survives the column round-trip");
             });
 
             // Re-registering the same graph at the same version is an idempotent no-op.
-            assertDoesNotThrow(() -> storage.inTxVoid(tx -> tx.putGraph(def)));
+            assertDoesNotThrow(() -> TestTx.inHome(storage, () -> Repositories.graph().putGraph(def)));
         }
     }
 
@@ -136,7 +137,7 @@ class JdbcGraphTest {
                 "jdbc:h2:mem:comp-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2,
                 new H2Dialect())) {
             storage.migrate();
-            storage.inTxVoid(tx -> {
+            TestTx.inHome(storage, () -> {
                 for (int i = 1; i <= 3; i++) {
                     var e = new com.wiggle.server.store.Rows.CompLog();
                     e.instanceId = "wfi_x";
@@ -146,23 +147,23 @@ class JdbcGraphTest {
                     e.queue = "q";
                     e.input = com.wiggle.core.Doc.parse("{\"in\":" + i + "}");
                     e.result = com.wiggle.core.Doc.parse("{\"out\":" + i + "}");
-                    tx.appendCompensation(e);
+                    Repositories.compensation().appendCompensation(e);
                 }
             });
-            storage.inTxVoid(tx -> {
-                var log = tx.compensationLog("wfi_x");
+            TestTx.inHome(storage, () -> {
+                var log = Repositories.compensation().compensationLog("wfi_x");
                 assertEquals(3, log.size());
                 assertEquals(List.of(1L, 2L, 3L), log.stream().map(e -> e.seq).toList(), "seq-ordered");
                 assertEquals(java.util.Map.of("in", 2L), log.get(1).input.raw());
                 assertEquals(java.util.Map.of("out", 2L), log.get(1).result.raw());
                 assertFalse(log.get(2).compensated);
-                tx.markCompensated("wfi_x", 3);
+                Repositories.compensation().markCompensated("wfi_x", 3);
             });
-            storage.inTxVoid(tx -> {
-                var log = tx.compensationLog("wfi_x");
+            TestTx.inHome(storage, () -> {
+                var log = Repositories.compensation().compensationLog("wfi_x");
                 assertTrue(log.get(2).compensated, "seq 3 marked");
                 assertFalse(log.get(0).compensated, "others untouched");
-                assertTrue(tx.compensationLog("wfi_other").isEmpty());
+                assertTrue(Repositories.compensation().compensationLog("wfi_other").isEmpty());
             });
         }
     }

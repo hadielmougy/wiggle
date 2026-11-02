@@ -3,7 +3,6 @@ package com.wiggle.postgres;
 import com.wiggle.jdbc.Dialect;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.ReplicatedStorage;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
@@ -12,11 +11,12 @@ import com.wiggle.server.topology.Topology;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Storage selection by URL scheme: an explicit switch the compiler checks, not a {@code
  * ServiceLoader} lookup. {@code jdbc:postgresql:} gets the PostgreSQL dialect, {@code jdbc:h2:} the
- * H2 one, and no URL at all keeps state in memory. A storage topology gets one such store per shard.
+ * H2 one, and no URL at all gets a new H2 database held in memory. A storage topology gets one such store per shard.
  *
  * <p>This lives here rather than in the runnable distribution because an application that
  * <em>embeds</em> the engine needs it too, and {@code dist} is not published. Everything it touches
@@ -36,12 +36,32 @@ public class PostgresStorageFactory implements StorageFactory {
 
     private static final System.Logger LOG = System.getLogger(PostgresStorageFactory.class.getName());
 
+    /** Connections of a store from {@link #inMemory()}. */
+    private static final int IN_MEMORY_POOL = 10;
+
     @Override public Storage create(ServerConfig config) {
         if (config.topology() != null) return sharded(config.topology());
         String url = config.jdbcUrl();
-        if (url == null || url.isBlank()) return new InMemoryStorage();
+        if (url == null || url.isBlank()) return inMemory(config.jdbcPoolSize());
         return new JdbcStorage(url, config.jdbcUser(), config.jdbcPassword(), config.jdbcPoolSize(),
                 dialect(url));
+    }
+
+    /** A store on a new, empty and migrated H2 database in this process's memory, dropped when the store closes its pool. */
+    public static JdbcStorage inMemory() {
+        return inMemory(IN_MEMORY_POOL);
+    }
+
+    private static JdbcStorage inMemory(int poolSize) {
+        JdbcStorage storage = new JdbcStorage("jdbc:h2:mem:wiggle-" + UUID.randomUUID() + ";MODE=PostgreSQL",
+                "sa", "", poolSize, new H2Dialect());
+        try {
+            storage.migrate();
+            return storage;
+        } catch (RuntimeException e) {
+            storage.close();
+            throw e;
+        }
     }
 
     /**

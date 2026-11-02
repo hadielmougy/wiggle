@@ -7,11 +7,12 @@ import com.wiggle.core.TokenStatus;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.jdbc.StatementListener;
 import com.wiggle.postgres.H2Dialect;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.DisplayName;
@@ -62,8 +63,8 @@ class JdbcTransactionsTest {
     void callerOwnedPool() {
         try (HikariDataSource ds = pool("owned")) {
             try (JdbcStorage storage = store(ds)) {
-                storage.inTxVoid(tx -> tx.putDefinition("owned", 1, "{}", "fp", "sha-256"));
-                assertTrue(storage.inTx(tx -> tx.definition("owned", 1)).isPresent());
+                TestTx.inHome(storage, () -> Repositories.graph().putDefinition("owned", 1, "{}", "fp", "sha-256"));
+                assertTrue(TestTx.inHome(storage, () -> Repositories.graph().definition("owned", 1)).isPresent());
             }
             assertFalse(ds.isClosed(), "the caller closes its own pool");
         }
@@ -77,9 +78,9 @@ class JdbcTransactionsTest {
             try (JdbcStorage storage = store(failing)) {
                 failCommit.set(true);
                 AtomicInteger attempts = new AtomicInteger();
-                StorageException e = assertThrows(StorageException.class, () -> storage.inTxVoid(tx -> {
+                StorageException e = assertThrows(StorageException.class, () -> TestTx.inHome(storage, () -> {
                     attempts.incrementAndGet();
-                    tx.putDefinition("maybe", 1, "{}", "fp", "sha-256");
+                    Repositories.graph().putDefinition("maybe", 1, "{}", "fp", "sha-256");
                 }));
                 assertEquals(Classification.AMBIGUOUS, e.classification());
                 assertFalse(e.repeatable(), "work that may be durable must not be re-applied");
@@ -92,22 +93,25 @@ class JdbcTransactionsTest {
     void nestedTransactionIsIndependent() {
         try (HikariDataSource ds = pool("nested"); JdbcStorage storage = store(ds)) {
             RuntimeException outerFailure = new IllegalStateException("outer fails");
-            RuntimeException thrown = assertThrows(RuntimeException.class, () -> storage.inTxVoid(outer -> {
-                outer.putDefinition("outer", 1, "{}", "fp", "sha-256");
-                storage.inTxVoid(inner -> inner.putDefinition("inner", 1, "{}", "fp", "sha-256"));
+            RuntimeException thrown = assertThrows(RuntimeException.class, () -> storage.inShard(0, outer -> {
+                outer.graph().putDefinition("outer", 1, "{}", "fp", "sha-256");
+                storage.inShard(0, inner -> {
+                    inner.graph().putDefinition("inner", 1, "{}", "fp", "sha-256");
+                    return null;
+                });
                 throw outerFailure;
             }));
             assertEquals(outerFailure, thrown);
-            assertTrue(storage.inTx(tx -> tx.definition("inner", 1)).isPresent(), "the nested transaction committed");
-            assertFalse(storage.inTx(tx -> tx.definition("outer", 1)).isPresent(), "the outer one rolled back");
+            assertTrue(TestTx.inHome(storage, () -> Repositories.graph().definition("inner", 1)).isPresent(), "the nested transaction committed");
+            assertFalse(TestTx.inHome(storage, () -> Repositories.graph().definition("outer", 1)).isPresent(), "the outer one rolled back");
         }
     }
 
-    @Test @DisplayName("store operations run only inside a transaction: a Tx kept past its transaction refuses to run")
+    @Test @DisplayName("store operations run only inside a transaction: repositories kept past theirs refuse to run")
     void operationsNeedATransaction() {
         try (HikariDataSource ds = pool("escaped"); JdbcStorage storage = store(ds)) {
-            Tx escaped = storage.inTx(tx -> tx);
-            IllegalStateException e = assertThrows(IllegalStateException.class, () -> escaped.definition("x", 1));
+            WriteRepositories escaped = storage.inShard(0, r -> r);
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> escaped.graph().definition("x", 1));
             assertTrue(e.getMessage().contains("no transaction"), e.getMessage());
         }
     }
@@ -119,14 +123,14 @@ class JdbcTransactionsTest {
             Rows.Token t = token(i, "tok-held");
             List<String> statements = new ArrayList<>();
             try (JdbcStorage.Observation watch = storage.observe(listener(statements))) {
-                storage.inTxVoid(tx -> {
-                    tx.insertInstance(i);
-                    tx.bufferWrites();
-                    tx.insertToken(t);
+                TestTx.inHome(storage, () -> {
+                    Repositories.instances().insertInstance(i);
+                    Repositories.bufferWrites();
+                    Repositories.tokens().insertToken(t);
                     t.status = TokenStatus.RUNNING;
-                    tx.updateToken(t);
+                    Repositories.tokens().updateToken(t);
                     assertTrue(statements.stream().noneMatch(sql -> sql.contains("wf_token")), "nothing written yet");
-                    assertEquals(TokenStatus.RUNNING, tx.findToken(t.id).orElseThrow().status,
+                    assertEquals(TokenStatus.RUNNING, Repositories.tokens().findToken(t.id).orElseThrow().status,
                             "a read in the transaction sees the held-back writes");
                 });
             }
@@ -135,11 +139,11 @@ class JdbcTransactionsTest {
             assertEquals(0, statements.stream().filter(sql -> sql.startsWith("UPDATE wf_token ")).count());
 
             Rows.Token late = token(i, "tok-late");
-            storage.inTxVoid(tx -> {
-                tx.bufferWrites();
-                tx.insertToken(late);
+            TestTx.inHome(storage, () -> {
+                Repositories.bufferWrites();
+                Repositories.tokens().insertToken(late);
             });
-            assertTrue(storage.inTx(tx -> tx.findToken(late.id)).isPresent(), "written at commit, with no read before it");
+            assertTrue(TestTx.inHome(storage, () -> Repositories.tokens().findToken(late.id)).isPresent(), "written at commit, with no read before it");
         }
     }
 
@@ -148,14 +152,14 @@ class JdbcTransactionsTest {
         try (HikariDataSource ds = pool("held-rollback"); JdbcStorage storage = store(ds)) {
             Rows.Instance i = instance("wfi-gone");
             Rows.Token t = token(i, "tok-gone");
-            assertThrows(IllegalStateException.class, () -> storage.inTxVoid(tx -> {
-                tx.insertInstance(i);
-                tx.bufferWrites();
-                tx.insertToken(t);
+            assertThrows(IllegalStateException.class, () -> TestTx.inHome(storage, () -> {
+                Repositories.instances().insertInstance(i);
+                Repositories.bufferWrites();
+                Repositories.tokens().insertToken(t);
                 throw new IllegalStateException("abandoned");
             }));
-            assertFalse(storage.inTx(tx -> tx.findInstance(i.id)).isPresent());
-            assertFalse(storage.inTx(tx -> tx.findToken(t.id)).isPresent());
+            assertFalse(TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).isPresent());
+            assertFalse(TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).isPresent());
         }
     }
 
@@ -195,7 +199,7 @@ class JdbcTransactionsTest {
                 "Connection is not available, request timed out", "08001", new SQLException("Connection refused"));
         DataSource dead = connections(null, c -> { throw timeout; });
         try (JdbcStorage storage = new JdbcStorage(dead, "jdbc:h2:mem:dead", new H2Dialect())) {
-            StorageException e = assertThrows(StorageException.class, () -> storage.inTx(tx -> tx.definition("x", 1)));
+            StorageException e = assertThrows(StorageException.class, () -> TestTx.inHome(storage, () -> Repositories.graph().definition("x", 1)));
             assertInstanceOf(StorageUnreachableException.class, e);
         }
     }

@@ -1,9 +1,10 @@
 package com.wiggle.server.auth;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -22,16 +23,16 @@ class AuthCacheTest {
 
     /** An auth shard that can be taken down. */
     private static final class Flaky implements Storage {
-        final InMemoryStorage mem = new InMemoryStorage();
+        final JdbcStorage mem = PostgresStorageFactory.inMemory();
         volatile boolean down;
         int reads;
 
         @Override public void migrate() { mem.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             if (down) throw new StorageException("auth shard down", null, StorageException.Classification.TRANSIENT);
             reads++;
-            return mem.inTx(work);
+            return mem.inShard(shard, work);
         }
 
         @Override public void close() { }

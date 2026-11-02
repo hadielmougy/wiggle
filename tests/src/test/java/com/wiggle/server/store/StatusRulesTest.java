@@ -5,6 +5,7 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -67,20 +68,20 @@ class StatusRulesTest {
         withJdbc(storage -> {
             for (TokenStatus s : TokenStatus.values()) {
                 String id = "wfi_" + s.name();
-                storage.inTxVoid(tx -> {
-                    tx.insertInstance(instance(id, InstanceStatus.RUNNING));
-                    tx.insertToken(token(id, s));
+                TestTx.inHome(storage, () -> {
+                    Repositories.instances().insertInstance(instance(id, InstanceStatus.RUNNING));
+                    Repositories.tokens().insertToken(token(id, s));
                 });
-                assertEquals(s.active(), storage.inTx(tx -> tx.hasActiveTokens(id)),
+                assertEquals(s.active(), TestTx.inHome(storage, () -> Repositories.tokens().hasActiveTokens(id)),
                         "hasActiveTokens disagrees with " + s + ".active()");
             }
             for (TokenStatus s : TokenStatus.values()) {
                 String id = "wfi_" + s.name();
-                storage.inTxVoid(tx -> tx.cancelActiveTokens(id, 2_000));
-                TokenStatus after = storage.inTx(tx -> tx.tokensOf(id).getFirst().status);
+                TestTx.inHome(storage, () -> Repositories.tokens().cancelActiveTokens(id, 2_000));
+                TokenStatus after = TestTx.inHome(storage, () -> Repositories.tokens().tokensOf(id).getFirst().status);
                 assertEquals(s.active() ? TokenStatus.CANCELLED : s, after,
                         "cancelActiveTokens touched the wrong set for " + s);
-                boolean stillActive = storage.inTx(tx -> tx.hasActiveTokens(id));
+                boolean stillActive = TestTx.inHome(storage, () -> Repositories.tokens().hasActiveTokens(id));
                 assertFalse(stillActive, "nothing active after a cancel");
             }
         });

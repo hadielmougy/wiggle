@@ -1,12 +1,16 @@
 package com.wiggle.server.search;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.ShardState;
+import com.wiggle.server.store.ShardTransactions;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -26,18 +30,18 @@ class SearchIndexTest {
 
     /** An in-memory shard that can be taken down. */
     private static final class Shard implements Storage {
-        final InMemoryStorage mem = new InMemoryStorage();
+        final JdbcStorage mem = PostgresStorageFactory.inMemory();
         volatile boolean down;
 
         @Override public void migrate() { }
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             if (down) throw new StorageException("search shard down", null, StorageException.Classification.TRANSIENT);
-            return mem.inTx(work);
+            return mem.inShard(shard, work);
         }
         @Override public void close() { }
 
         int docs() {
-            return mem.inTx(tx -> tx.searchDocsAfter("", 10_000)).size();
+            return TestTx.inHome(mem, () -> Repositories.search().searchDocsAfter("", 10_000)).size();
         }
     }
 
@@ -46,7 +50,7 @@ class SearchIndexTest {
 
     private ShardedStorage storage() {
         List<ShardedStorage.Member> members = new ArrayList<>();
-        members.add(new ShardedStorage.Member(0, ShardState.ACTIVE, true, new InMemoryStorage()));
+        members.add(new ShardedStorage.Member(0, ShardState.ACTIVE, true, PostgresStorageFactory.inMemory()));
         for (int i = 1; i <= 3; i++) {
             Shard s = shards.computeIfAbsent(i, k -> new Shard());
             members.add(new ShardedStorage.Member(i, ShardState.ACTIVE, false, s));
@@ -109,7 +113,7 @@ class SearchIndexTest {
         // A stale copy on a shard that no longer owns the instance: the newer one wins.
         String id = "wfi.s0.d1";
         int stray = index.winner(id) == 1 ? 2 : 1;
-        storage.inShard(stray, tx -> tx.upsertSearchDoc(doc(id, "apple", 1)));
+        new ShardTransactions(storage).inShard(stray, () -> Repositories.search().upsertSearchDoc(doc(id, "apple", 1)));
         List<Rows.SearchHit> all = index.search(query("apple"), false).hits();
         assertEquals(30, all.size(), "one hit per instance");
         assertEquals(101, all.stream().filter(h -> h.doc().instanceId().equals(id)).findFirst().orElseThrow().doc().updatedAt());
@@ -125,7 +129,7 @@ class SearchIndexTest {
         assertThrows(StorageException.class, () -> index.search(query("pear"), false));
         SearchIndex.Result r = index.search(query("pear"), true);
         assertTrue(r.partial());
-        assertEquals(30 - shards.get(2).mem.inTx(tx -> tx.searchDocsAfter("", 1000)).size(), r.hits().size());
+        assertEquals(30 - TestTx.inHome(shards.get(2).mem, () -> Repositories.search().searchDocsAfter("", 1000)).size(), r.hits().size());
     }
 
     @Test @DisplayName("after a search shard is drained, the rebalance moves its documents to their new shard")

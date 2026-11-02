@@ -155,11 +155,11 @@ final class Instances {
      */
     void notifyParent(Instance child, long now) {
         if (child.parentTokenId == null) return;
-        Token probe = Repositories.locks().findToken(child.parentTokenId).orElse(null);
+        Token probe = Repositories.tokens().findToken(child.parentTokenId).orElse(null);
         if (probe == null) return;
         Instance parent = Repositories.instances().lockInstance(probe.instanceId).orElse(null);
         if (parent == null || !parent.status.running()) return;
-        Token t = Repositories.locks().findToken(child.parentTokenId).orElse(null);   // re-read under the lock
+        Token t = Repositories.tokens().findToken(child.parentTokenId).orElse(null);   // re-read under the lock
         if (t == null || t.status != TokenStatus.AWAITING || t.kind != NodeKind.SUB_WORKFLOW) return;
         LazyGraph def = definitions.graph(parent.workflow, parent.version);
         Node node = def.node(t.nodeId);
