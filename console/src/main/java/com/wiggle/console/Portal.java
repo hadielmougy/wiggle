@@ -41,28 +41,58 @@ public final class Portal implements AutoCloseable {
     public static Optional<Portal> fromEnvironment(WiggleServer server, Tls.Options tls, Map<String, String> env) {
         int port = port(env);
         if (port <= 0) return Optional.empty();
+        Web web = web(server, tls.hasKeyStore(), env);
+        Portal portal = new Portal(new ConsoleServer(web.servlet(), web.filter(), port, tls).start());
+        web.warnIfSetupRequired(tls.hasKeyStore(), portal.port());
+        return Optional.of(portal);
+    }
+
+    /**
+     * The portal's servlet, for {@code /*}, and the sign-in filter in front of it, for a web server to
+     * serve on the portal's port.
+     */
+    public static final class Web {
+        private final DashboardServlet servlet;
+        private final AuthFilter filter;
+        private final ConsoleAuth auth;
+
+        private Web(DashboardServlet servlet, AuthFilter filter, ConsoleAuth auth) {
+            this.servlet = servlet;
+            this.filter = filter;
+            this.auth = auth;
+        }
+
+        public DashboardServlet servlet() { return servlet; }
+
+        public AuthFilter filter() { return filter; }
+
+        /** Warns that anyone who reaches {@code port} can set the admin password, while that is so. */
+        public void warnIfSetupRequired(boolean https, int port) {
+            if (!auth.setupRequired()) return;
+            LOG.log(System.Logger.Level.WARNING, () -> "the portal has no admin password yet: open "
+                    + (https ? "https" : "http") + "://<this host>:" + port
+                    + "/setup to set it, or set WIGGLE_DASHBOARD_PASSWORD. Until then anyone who can reach "
+                    + "that port can set it.");
+        }
+    }
+
+    /** The portal over {@code server}'s engine and accounts, set up as {@code env} says; secure cookies when {@code https}. */
+    public static Web web(WiggleServer server, boolean https, Map<String, String> env) {
         Accounts accounts = server.accounts();
         AuthCache cache = server.authCache();
         ConsoleAuth auth = new ConsoleAuth(get(env, "WIGGLE_DASHBOARD_USER", "admin"),
                 get(env, "WIGGLE_DASHBOARD_PASSWORD", null),
                 get(env, "WIGGLE_DASHBOARD_VIEWER_USER", "viewer"),
                 get(env, "WIGGLE_DASHBOARD_VIEWER_PASSWORD", null),
-                tls.hasKeyStore(), accounts, cache);
+                https, accounts, cache);
         importUsersFile(accounts, Path.of(get(env, "WIGGLE_CONSOLE_USERS_FILE", "wiggle-users.json")),
                 auth.builtinNames());
         DashboardData data = new EngineDashboardData(server.engine(), server.cluster(), server.search().orElse(null));
-        Portal portal = new Portal(new ConsoleServer(data, auth, port, tls).start());
-        if (auth.setupRequired()) {
-            LOG.log(System.Logger.Level.WARNING, () -> "the portal has no admin password yet: open "
-                    + (tls.hasKeyStore() ? "https" : "http") + "://<this host>:" + portal.port()
-                    + "/setup to set it, or set WIGGLE_DASHBOARD_PASSWORD. Until then anyone who can reach "
-                    + "that port can set it.");
-        }
-        return Optional.of(portal);
+        return new Web(new DashboardServlet(data, auth), new AuthFilter(auth), auth);
     }
 
     /** The port {@code env} asks for: {@value #PORT_ENV}, {@value #DEFAULT_PORT} when unset, 0 for none. */
-    static int port(Map<String, String> env) {
+    public static int port(Map<String, String> env) {
         String raw = env.get(PORT_ENV);
         try {
             return raw == null || raw.isBlank() ? DEFAULT_PORT : Integer.parseInt(raw.trim());

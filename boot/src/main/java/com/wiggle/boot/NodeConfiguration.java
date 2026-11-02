@@ -22,7 +22,7 @@ class NodeConfiguration {
 
     /** Each setting from Spring's environment, by its {@code wiggle.*} property name or its {@code WIGGLE_*} one. */
     @Bean
-    Settings settings(Environment environment) {
+    static Settings settings(Environment environment) {
         return (property, env) -> {
             String v = property == null ? null : environment.getProperty(property);
             return v != null ? v : env == null ? null : environment.getProperty(env);

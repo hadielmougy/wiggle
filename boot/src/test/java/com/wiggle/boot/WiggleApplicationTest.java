@@ -34,6 +34,7 @@ class WiggleApplicationTest {
     static void settings(DynamicPropertyRegistry registry) {
         registry.add("WIGGLE_PORT", () -> PORT);
         registry.add("WIGGLE_NODE_NAME", () -> "boot-test");
+        registry.add("WIGGLE_PORTAL_PORT", () -> 0);
     }
 
     @Autowired ServerConfig config;

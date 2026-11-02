@@ -19,6 +19,10 @@ final class ConsoleServer implements AutoCloseable {
     private final Tomcat tomcat;
 
     ConsoleServer(DashboardData data, ConsoleAuth auth, int port, Tls.Options tls) {
+        this(new DashboardServlet(data, auth), new AuthFilter(auth), port, tls);
+    }
+
+    ConsoleServer(DashboardServlet servlet, AuthFilter filter, int port, Tls.Options tls) {
         this.tomcat = new Tomcat();
         this.tomcat.setBaseDir(System.getProperty("java.io.tmpdir"));
 
@@ -28,12 +32,12 @@ final class ConsoleServer implements AutoCloseable {
         tomcat.setConnector(connector);
 
         Context ctx = tomcat.addContext("", null);
-        Tomcat.addServlet(ctx, "dashboard", new DashboardServlet(data, auth));
+        Tomcat.addServlet(ctx, "dashboard", servlet);
         ctx.addServletMappingDecoded("/*", "dashboard");
 
         FilterDef fd = new FilterDef();
         fd.setFilterName("auth");
-        fd.setFilter(new AuthFilter(auth));
+        fd.setFilter(filter);
         ctx.addFilterDef(fd);
         FilterMap fm = new FilterMap();
         fm.setFilterName("auth");

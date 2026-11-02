@@ -10,6 +10,7 @@ dependencies {
     implementation(platform(SpringBootPlugin.BOM_COORDINATES))
     implementation(project(":server"))
     implementation(project(":postgres"))
+    implementation(project(":console"))
     implementation("org.springframework.boot:spring-boot-starter")
     implementation("org.springframework.boot:spring-boot-starter-tomcat")
 
