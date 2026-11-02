@@ -54,7 +54,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * do fails here, by name, rather than silently in production.
  *
  * <p>It exists because each backend used to be tested by its own tests -- {@code GraphStoreTest}
- * against the in-memory store, {@code JdbcGraphTest} against SQL -- and two implementations of one
+ * against a store kept in memory, {@code JdbcGraphTest} against SQL -- and two implementations of one
  * rule is two chances to drift, silently, because each passes its own tests. The spec these
  * assertions follow is {@code docs/spec/80-storage.md}.
  *

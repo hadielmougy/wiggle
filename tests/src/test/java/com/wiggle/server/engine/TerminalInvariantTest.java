@@ -1,8 +1,8 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.tests.Reports;
 import com.wiggle.core.*;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
@@ -182,7 +182,7 @@ class TerminalInvariantTest {
     }
 
     private static void drive(WorkflowDefinition def, Consumer<WorkflowEngine> body) {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(def);

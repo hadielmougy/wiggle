@@ -1,10 +1,10 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.tests.Reports;
 import com.wiggle.core.Node;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.PayloadCodec;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
@@ -35,7 +35,7 @@ import java.util.function.Function;
  * the pre-fork view.
  *
  * <p>Counted, not timed: the proxy below records what the engine ASKS the store for, which is the
- * same on every backend. Wall-clock would only measure the in-memory store's map lookups and would
+ * same on every backend. Wall-clock on H2 in memory would
  * say nothing about the JSON parse a real database pays. Bytes are computed by re-encoding what was
  * handed back, which is exactly what a JDBC row mapper decodes.
  *
@@ -81,7 +81,7 @@ class ForkWidthBench {
     /** Drives one fork/join instance of the given width to completion, counting store reads. */
     private static Tally run(int width) {
         AtomicLong calls = new AtomicLong(), rows = new AtomicLong(), bytes = new AtomicLong();
-        try (Storage raw = new InMemoryStorage()) {
+        try (Storage raw = PostgresStorageFactory.inMemory()) {
             raw.migrate();
             Storage counting = new Counting(raw, calls, rows, bytes);
             DefinitionRegistry registry = new DefinitionRegistry(counting);

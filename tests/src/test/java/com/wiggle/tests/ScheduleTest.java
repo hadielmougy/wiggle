@@ -2,9 +2,9 @@ package com.wiggle.tests;
 
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
@@ -35,7 +35,7 @@ class ScheduleTest {
 
     @Test @DisplayName("a due schedule fires exactly one instance and re-arms one interval ahead")
     void firesAndRearms() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             FlowSpec bp = probe();
@@ -61,7 +61,7 @@ class ScheduleTest {
 
     @Test @DisplayName("the fire-time claim is a compare-and-set: a stale sweep cannot double-fire")
     void staleClaimCannotDoubleFire() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             engine.register(probe().definition());
@@ -80,7 +80,7 @@ class ScheduleTest {
 
     @Test @DisplayName("deleting a schedule stops it; creating one for an unknown workflow fails")
     void lifecycleAndValidation() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             engine.register(probe().definition());
@@ -102,7 +102,7 @@ class ScheduleTest {
 
     @Test @DisplayName("a cron schedule arms at the expression's next UTC match and re-arms by cron on fire")
     void cronSchedule() throws Exception {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = engine(storage);
             engine.register(probe().definition());

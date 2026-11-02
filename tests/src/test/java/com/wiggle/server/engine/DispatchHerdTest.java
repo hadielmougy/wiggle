@@ -6,8 +6,9 @@ import com.wiggle.core.TaskActivation;
 import com.wiggle.core.criteria.AttrType;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.ClaimFilter;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 import org.junit.jupiter.api.DisplayName;
@@ -38,9 +39,9 @@ class DispatchHerdTest {
         Map<String, Object> work(Map<String, Object> ctx);
     }
 
-    /** {@link InMemoryStorage} that counts {@code claimTasks} calls. */
+    /** An H2 store that counts {@code claimTasks} calls. */
     private static final class CountingStorage implements Storage {
-        final InMemoryStorage delegate = new InMemoryStorage();
+        final JdbcStorage delegate = PostgresStorageFactory.inMemory();
         final AtomicInteger claims = new AtomicInteger();
         final Map<String, AtomicInteger> claimsBy = new java.util.concurrent.ConcurrentHashMap<>();
 

@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
@@ -12,7 +12,7 @@ class RoutedConformanceTest extends EngineConformanceTest {
 
     @BeforeEach
     void routeChecked() {
-        Scenarios.useStorage(config -> new RouteCheckingStorage(new InMemoryStorage()));
+        Scenarios.useStorage(config -> new RouteCheckingStorage(PostgresStorageFactory.inMemory()));
     }
 
     @AfterEach

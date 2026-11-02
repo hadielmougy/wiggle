@@ -1,8 +1,9 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.Node;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.ClaimFilter;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.CurrentTx;
@@ -40,7 +41,7 @@ class WakeOnProduceTest {
     @Test
     @DisplayName("parking a token READY signals its queue after the transaction commits")
     void parkingReadySignalsTheQueue() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DispatchNotifier notifier = new DispatchNotifier();
             Transactions transactions = new Transactions(storage, notifier);
@@ -70,7 +71,7 @@ class WakeOnProduceTest {
     @Test
     @DisplayName("a scope opened inside another on the same shard joins it, and wakes only after the outer commits")
     void nestedScopeOnTheSameShardJoins() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DispatchNotifier notifier = new DispatchNotifier();
             Transactions transactions = new Transactions(storage, notifier);
@@ -96,7 +97,7 @@ class WakeOnProduceTest {
     @Test
     @DisplayName("a write scope inside one on another shard is refused, and leaves the thread able to open a fresh one")
     void nestedScopeOnAnotherShardIsRefused() {
-        try (InMemoryStorage seven = new InMemoryStorage(); InMemoryStorage two = new InMemoryStorage()) {
+        try (JdbcStorage seven = PostgresStorageFactory.inMemory(); JdbcStorage two = PostgresStorageFactory.inMemory()) {
             Storage storage = new ShardedStorage(Map.of(7, seven, 2, two), 2);
             DispatchNotifier notifier = new DispatchNotifier();
             Transactions transactions = new Transactions(storage, notifier);

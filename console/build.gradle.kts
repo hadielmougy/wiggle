@@ -10,6 +10,7 @@ dependencies {
 
     testImplementation(project(":client"))
     testImplementation(project(":test-fixtures"))
+    testImplementation(project(":postgres"))   // H2 in memory for the servers under test
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

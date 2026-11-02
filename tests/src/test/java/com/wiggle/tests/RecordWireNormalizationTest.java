@@ -6,6 +6,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RecordMapper;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
@@ -64,7 +65,7 @@ class RecordWireNormalizationTest {
     @Test @DisplayName("start-by-name and signal both accept a record and flatten it for the wire")
     void recordThroughNameOverloadAndSignal() throws Exception {
         FlowSpec bp = flowSpec();
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "recwire-w").registerHandler(new OrderH())) {
             client.register(bp);

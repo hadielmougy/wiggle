@@ -1,6 +1,7 @@
 package com.wiggle.server.auth;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.Tx;
@@ -22,7 +23,7 @@ class AuthCacheTest {
 
     /** An auth shard that can be taken down. */
     private static final class Flaky implements Storage {
-        final InMemoryStorage mem = new InMemoryStorage();
+        final JdbcStorage mem = PostgresStorageFactory.inMemory();
         volatile boolean down;
         int reads;
 

@@ -3,7 +3,7 @@ package com.wiggle.server.engine;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Ids;
 import com.wiggle.core.ShardIds;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
@@ -60,7 +60,7 @@ class ShardIdsEngineTest {
 
     @Test @DisplayName("an instance, its tokens and its sub-workflow all carry the shard it was minted on")
     void everythingAnInstanceOwnsIsOnItsShard() {
-        Storage storage = new InMemoryStorage();
+        Storage storage = PostgresStorageFactory.inMemory();
         WorkflowEngine engine = engine(storage, InstanceIds.onShard(5));
 
         String parent = engine.start("parent", null, Map.of(), null);
@@ -76,7 +76,7 @@ class ShardIdsEngineTest {
 
     @Test @DisplayName("an instance with a bare id gets bare tokens and a bare sub-workflow")
     void aBareInstanceKeepsEverythingBare() {
-        Storage storage = new InMemoryStorage();
+        Storage storage = PostgresStorageFactory.inMemory();
         WorkflowEngine engine = engine(storage, BARE);
 
         String parent = engine.start("parent", null, Map.of(), null);

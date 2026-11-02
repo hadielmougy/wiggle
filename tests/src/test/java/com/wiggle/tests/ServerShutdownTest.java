@@ -3,6 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Ids;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -50,7 +51,7 @@ class ServerShutdownTest {
     void closeTerminatesEvenWithAnInFlightLongPoll() throws Exception {
         FlowSpec spec = FlowSpec.define("shutdown-" + Ids.next("wf"), 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-        WiggleServer server = new WiggleServer(config()).start();
+        WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
         int port = server.port();
         WiggleClient client = new WiggleClient(server.baseUrl());
         client.register(spec);

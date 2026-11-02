@@ -32,9 +32,9 @@ still behaves the same.
    - 1c. `Tx` splits into repositories on `JdbcTemplate`, with the same SQL.
    - 1d. Call sites move to `ShardTransactions` and the repositories, file by file.
    - 1e. `BufferedTx` becomes a buffer tied to the Spring transaction.
-   - 1f. Services on one fixed database move to `@Transactional`.
+   - 1f. Moved to the start of phase 2: `@Transactional` needs the services to be Spring beans.
    - 1g. `InMemoryStorage`, `Storage.inTx*`, `Tx` and `ReadTx` are removed; tests move to H2.
-2. The `boot` module: configuration binding with the `WIGGLE_*` names kept, beans for the shard
+2. The `boot` module, starting with 1f (services on one fixed database move to `@Transactional`): configuration binding with the `WIGGLE_*` names kept, beans for the shard
    `DataSource`s and transaction managers, the API and portal servlets on Boot's Tomcat (two ports),
    Actuator in place of `HealthServer`, TLS, HTTP/2.
 3. Test support: `@WiggleBootTest`, a few named profiles, `WiggleTestNodes` for multi-node tests, and a

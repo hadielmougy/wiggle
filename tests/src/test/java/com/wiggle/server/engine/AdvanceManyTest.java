@@ -1,5 +1,6 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.tests.Reports;
 import com.wiggle.tests.Modes;
 
@@ -17,7 +18,6 @@ import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 import org.junit.jupiter.api.DisplayName;
@@ -79,7 +79,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("one call, one commit: every instance in the batch advances independently")
     void batchAdvancesIndependentInstances() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -108,7 +108,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("a refused run costs its batch-mates nothing: one transaction, no replay, still reportable")
     void refusedRunLeavesBatchMatesAlone() {
-        CountingStorage storage = new CountingStorage(new InMemoryStorage(), new AtomicLong());
+        CountingStorage storage = new CountingStorage(PostgresStorageFactory.inMemory(), new AtomicLong());
         try (storage) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
@@ -140,7 +140,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("two arms of one instance in a batch: the first run wins, the second is told to retry")
     void duplicateInstanceKeepsTheFirstRun() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -178,7 +178,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("a run whose definition is not LOCAL_ASYNC is refused and pointed at the single path")
     void foreignModeRunIsRefused() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -207,8 +207,7 @@ class AdvanceManyTest {
         }
     }
 
-    /** On H2, not in-memory: the rollback this pins is the storage's, and {@code InMemoryStorage}
-     *  applies writes directly -- an exception there rolls nothing back. */
+    /** The rollback this pins is the storage's. */
     @Test @DisplayName("a mid-run mismatch rolls the whole batch back; replay commits the innocent run alone")
     void midRunMismatchReplaysPerRun() {
         try (Storage storage = new JdbcStorage("jdbc:h2:mem:am-" + System.nanoTime()
@@ -246,7 +245,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("a loop overrun is a durable per-run result, not an abort of the batch")
     void loopOverrunStaysDurableInsideTheBatch() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -288,7 +287,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("a compensator in a batch is answered with the COMPENSATING status; the reverse pass is untouched")
     void compensatorCannotRideABatch() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -329,7 +328,7 @@ class AdvanceManyTest {
 
     @Test @DisplayName("malformed batches refuse the whole call: caller bugs, not instance state")
     void malformedBatchesRefuseTheWholeCall() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowEngine engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
             assertEquals(400, assertThrows(EngineException.class,
@@ -392,7 +391,7 @@ class AdvanceManyTest {
      */
     @Test @DisplayName("a sub-workflow child is refused: its completion locks the parent outside the sorted set")
     void subWorkflowChildIsRefused() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
@@ -550,39 +549,6 @@ class AdvanceManyTest {
         }
     }
 
-
-    /**
-     * On a store with no rollback the apply phase must write DIRECTLY, not through the buffer.
-     * The hazard is a broken run whose FIRST step is compensable: its saga capture is unbuffered
-     * and lands immediately, but its settle rides the buffer -- a mid-run throw discards the
-     * buffer, the token still looks RUNNING, and the replay re-executes the step, capturing a
-     * second time. The undo would later run twice. Direct writes keep capture and settle
-     * together, so the replay finds the settled token and refuses instead of re-running.
-     */
-    @Test @DisplayName("a failed batch on the in-memory store cannot double a saga capture")
-    void nonTransactionalApplyCannotDoubleACapture() {
-        try (Storage storage = new InMemoryStorage()) {
-            storage.migrate();
-            DefinitionRegistry registry = new DefinitionRegistry(storage);
-            WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);
-            FlowSpec bp = FlowSpec.define("am-direct", 1, Map.class, SagaSteps.class, (f, s) -> f
-                    .executeInLocalAsync()
-                    .thenApplyCompensable(s::reserve)
-                    .thenApply(s::boom));
-            registry.register(bp.definition());
-            engine.start(bp.name(), bp.version(), Map.of(), null);
-            TaskActivation a = engine.poll("w1", bp.definition().queues(), 10, null).getFirst();
-
-            // The compensable first step succeeds; the second step lies about its node.
-            Map<String, RunResult> results = engine.report(List.of(new Run(a.taskId(), "w1",
-                    List.of(new StepInput(a.nodeId(), Map.of("reserved", true), null),
-                            new StepInput("no-such-node", Map.of(), null)), true)));
-
-            assertEquals(409, results.get(a.taskId()).errorStatus());
-            assertEquals(1, storage.inTx(tx -> tx.compensationLog(a.instanceId())).size(),
-                    "one completion, one capture -- the replay must not have re-executed the step");
-        }
-    }
 
     /** Dies with a RuntimeException on transaction number {@code failOnTx}, once. */
     private record FailingStorage(Storage delegate, AtomicLong seen, AtomicLong failOnTx) implements Storage {

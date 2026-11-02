@@ -70,7 +70,7 @@ class FindByCorrelationTest {
         }
     }
 
-    @Test @DisplayName("findByCorrelation returns the instances for a business key (in-memory store)")
+    @Test @DisplayName("findByCorrelation returns the instances for a business key (no URL: H2 in memory)")
     void inMemory() throws Exception {
         run(null);
     }

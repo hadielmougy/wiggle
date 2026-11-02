@@ -10,6 +10,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -74,7 +75,7 @@ class SagaCompensationTest {
     }
 
     private static InstanceView run(FlowSpec bp, Object handlers) throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "saga-w").registerHandler(handlers)) {
             client.register(bp);

@@ -1,6 +1,6 @@
 package com.wiggle.server.auth;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
@@ -36,7 +36,7 @@ class AccountsTest {
 
     @Test @DisplayName("the built-in roles exist after bootstrap, once, and cannot be changed or deleted")
     void builtinRoles() {
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
         a.bootstrap();
         assertEquals(List.of("admin", "viewer"), a.roles().stream().map(Rows.AuthRole::name).toList());
         assertEquals(Set.of("*"), a.roles().getFirst().permissions());
@@ -47,7 +47,7 @@ class AccountsTest {
 
     @Test @DisplayName("an account signs in with its password, holds its roles' permissions, and every change is audited")
     void accountLifecycle() {
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
         a.putRole("root", "ops", List.of("read", "instance.cancel:orders"), true);
         a.create("root", "dana", "dana-password", List.of("ops"), Set.of(), true);
 
@@ -71,7 +71,7 @@ class AccountsTest {
 
     @Test @DisplayName("a role grants only known permissions; an account holds only existing roles")
     void validation() {
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
         assertThrows(IllegalArgumentException.class, () -> a.putRole("x", "bad", List.of("instance.delete"), true));
         assertThrows(IllegalArgumentException.class, () -> a.putRole("x", "bad", List.of("user.manage:dana"), true),
                 "user.manage takes no scope");
@@ -89,7 +89,7 @@ class AccountsTest {
 
     @Test @DisplayName("with no built-in admin, nothing may leave the accounts without one that can manage users")
     void someoneCanAlwaysManage() {
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
         assertThrows(IllegalArgumentException.class,
                 () -> a.create(null, "rey", "rey-password", List.of("viewer"), Set.of(), false),
                 "a first account that cannot manage users would lock everyone out");
@@ -113,7 +113,7 @@ class AccountsTest {
 
     @Test @DisplayName("sessions store only a hash of their token, and end on logout and on a password change")
     void sessions() {
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
         a.create(null, "dana", "dana-password", List.of("admin"), Set.of(), true);
         String one = a.openSession("dana", 60_000);
         String two = a.openSession("dana", 60_000);
@@ -132,7 +132,7 @@ class AccountsTest {
 
     @Test @DisplayName("an API key is shown once and stored as a hash; a certificate credential names its subject")
     void credentials() {
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
         a.putRole("ops", "worker", List.of("task.poll"), true);
         String key = a.createApiKey("ops", "w1", "worker", null);
         assertTrue(key.startsWith(Accounts.KEY_PREFIX));
@@ -166,7 +166,7 @@ class AccountsTest {
                 + "{\"name\":\"rey\",\"role\":\"viewer\",\"salt\":\"" + h.salt() + "\",\"hash\":\"" + h.hash()
                 + "\",\"iterations\":" + h.iterations() + "},"
                 + "{\"name\":\"admin\",\"role\":\"admin\",\"salt\":\"x\",\"hash\":\"y\",\"iterations\":1}]}");
-        Accounts a = accounts(new InMemoryStorage());
+        Accounts a = accounts(PostgresStorageFactory.inMemory());
 
         assertEquals(2, a.importFile(file, Set.of("admin")));
         Accounts.Account dana = a.account("dana").orElseThrow();

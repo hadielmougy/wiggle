@@ -2,8 +2,8 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Node;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.GraphStore;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -80,7 +80,7 @@ class DefinitionCacheTest {
     @Test
     @DisplayName("a process restarting against an existing database still caches the definition")
     void aRestartedRegistryStillCaches() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             new DefinitionRegistry(storage).register(def("orders", 1, "a"));
 
@@ -98,7 +98,7 @@ class DefinitionCacheTest {
     @Test
     @DisplayName("a forced replacement refreshes the cached definition rather than keeping the old one")
     void forcedReplacementRefreshesTheCache() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(def("orders", 1, "before"));
@@ -112,7 +112,7 @@ class DefinitionCacheTest {
     @Test
     @DisplayName("two registries never share a cache, even for the same name and version")
     void registriesDoNotShareACache() {
-        try (Storage one = new InMemoryStorage(); Storage two = new InMemoryStorage()) {
+        try (Storage one = PostgresStorageFactory.inMemory(); Storage two = PostgresStorageFactory.inMemory()) {
             one.migrate();
             two.migrate();
             DefinitionRegistry first = new DefinitionRegistry(one);
@@ -129,7 +129,7 @@ class DefinitionCacheTest {
     @Test
     @DisplayName("a rejected registration leaves the cache holding the graph that is actually stored")
     void aRejectedRegistrationDoesNotCache() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(def("orders", 1, "stored"));
@@ -144,7 +144,7 @@ class DefinitionCacheTest {
     @Test
     @DisplayName("a node that did not register a small definition holds it after first reading it")
     void anotherNodeFillsTheCacheOnFirstUse() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             new DefinitionRegistry(storage).register(def("orders", 1, "a"));
             DefinitionRegistry other = new DefinitionRegistry(storage);
@@ -159,7 +159,7 @@ class DefinitionCacheTest {
     @Test
     @DisplayName("a definition past the node limit is left to the one-node-at-a-time path")
     void anOversizedDefinitionIsNotCached() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(chain("big", 1, 200));

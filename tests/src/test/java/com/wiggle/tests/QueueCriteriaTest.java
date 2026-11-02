@@ -15,6 +15,7 @@ import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 import com.wiggle.core.wire.ControlPlane;
 import com.wiggle.core.wire.Msg;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -169,7 +170,7 @@ class QueueCriteriaTest {
         ServerConfig longPolls = new ServerConfig(TestPorts.free(), "qc-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofSeconds(10), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(longPolls).start();
+        try (WiggleServer server = new WiggleServer(longPolls, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker v = new Worker(client, "vip", WorkerOptions.defaults().withConcurrency(1).withCriteria(vip))
                      .registerHandler(wf, new H("vip", new ConcurrentHashMap<>()));

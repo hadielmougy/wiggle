@@ -4,7 +4,7 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Node;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
 import org.junit.jupiter.api.DisplayName;
@@ -74,7 +74,7 @@ class LocalBatchBench {
     private static Tally run(int steps) {
         Map<String, Long> counts = new ConcurrentHashMap<>();
         AtomicLong total = new AtomicLong();
-        try (Storage raw = new InMemoryStorage()) {
+        try (Storage raw = PostgresStorageFactory.inMemory()) {
             raw.migrate();
             Storage counting = new Counting(raw, counts, total);
             DefinitionRegistry registry = new DefinitionRegistry(counting);

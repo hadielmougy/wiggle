@@ -1,6 +1,6 @@
 package com.wiggle.tests;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.AfterEach;
@@ -20,8 +20,8 @@ class ShardedConformanceTest extends EngineConformanceTest {
     void twoShards() {
         Scenarios.useStorage(config -> {
             Map<Integer, Storage> shards = new LinkedHashMap<>();
-            shards.put(1, new InMemoryStorage());
-            shards.put(0, new InMemoryStorage());
+            shards.put(1, PostgresStorageFactory.inMemory());
+            shards.put(0, PostgresStorageFactory.inMemory());
             return new ShardedStorage(shards, 0);
         });
     }

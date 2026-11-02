@@ -67,7 +67,8 @@ the two parallel arms.
 
 ## 1. Quickstart: Docker + Java client
 
-Start a server. It uses the in-memory store, so stopping the container resets its data:
+Start a server. With no database configured it keeps its data in an H2 database in memory, so stopping
+the container resets it:
 
 ```bash
 docker run --rm --name wiggle -p 8080:8080 hadielmougy/wiggle:0.0.10
@@ -158,10 +159,10 @@ One codebase, three postures — start embedded, grow into a cluster, **without 
 
 ### 2.1 Embedded — one JVM, zero infrastructure
 
-The server is a library. No database configured means an in-memory store — perfect for tests:
+The server is a library. No database configured means an H2 database in memory — perfect for tests:
 
 ```java
-try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
+try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
     // register flow specs, run workers, start instances — all in-process
 }
@@ -253,6 +254,7 @@ The fastest end-to-end: an embedded server, one worker, one instance — one JVM
 import com.wiggle.client.flow.*;
 import com.wiggle.client.worker.*;
 import com.wiggle.core.InstanceView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.*;
 
 import java.time.Duration;
@@ -276,7 +278,7 @@ interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
 FlowSpec greet = FlowSpec.define("greet", 1, Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
 // 3. Embedded server + worker + one instance.
-try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment()).start();
+try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
      WiggleClient client = new WiggleClient(server.baseUrl())) {
 
     try (Worker worker = new Worker(client, "worker-1")
@@ -625,8 +627,7 @@ Suggestions and PRs welcome — open an issue.
 
 ```kotlin
 implementation("sh.wiggle:wiggle-client:0.0.10")     // DSL + worker + client
-implementation("sh.wiggle:wiggle-server:0.0.10")     // only to embed the server
-implementation("sh.wiggle:wiggle-postgres:0.0.10")   // + your storage module
+implementation("sh.wiggle:wiggle-postgres:0.0.10")   // only to embed the server: storage, server included
 ```
 
 Prefer the **BOM** so every wiggle module stays version-aligned

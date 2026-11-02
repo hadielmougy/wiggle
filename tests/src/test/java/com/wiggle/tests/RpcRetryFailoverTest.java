@@ -2,6 +2,7 @@ package com.wiggle.tests;
 
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -57,7 +58,7 @@ class RpcRetryFailoverTest {
         Thread late = new Thread(() -> {
             try {
                 Thread.sleep(700);                              // the server is absent for a beat...
-                server.set(new WiggleServer(config(port)).start());  // ...then a node takes over the address
+                server.set(new WiggleServer(config(port), new PostgresStorageFactory()).start());  // ...then a node takes over the address
             } catch (Exception e) { throw new RuntimeException(e); }
         });
         try (WiggleClient client = new WiggleClient("localhost:" + port)) {

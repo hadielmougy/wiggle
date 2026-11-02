@@ -1,5 +1,6 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.tests.Reports;
 import com.wiggle.core.Json;
 import com.wiggle.core.ScratchKeys;
@@ -8,7 +9,6 @@ import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresDialect;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 import com.wiggle.tests.TestDb;
@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>A scope frame carries a full copy of its scope's view, so a token nested {@code d} deep holds
  * {@code d} views — payload grows linearly with depth, and the bytes an instance writes over its
  * lifetime grow quadratically (a token at depth k carries k views, summed over every level). This
- * measures both, against the in-memory store and (when {@code WIGGLE_TEST_PG_URL} is set) a real
+ * measures both, against H2 in memory and (when {@code WIGGLE_TEST_PG_URL} is set) a real
  * PostgreSQL, where the bytes become real row writes.
  *
  * <p>Two topologies:
@@ -309,7 +309,7 @@ class NestingPayloadBench {
     // ---------- plumbing ----------
 
     private static Storage open(String pg) {
-        if (pg == null) return new InMemoryStorage();
+        if (pg == null) return PostgresStorageFactory.inMemory();
         return new JdbcStorage(TestDb.url("PG"), TestDb.user("PG"), TestDb.password("PG"), 16,
                 new PostgresDialect());
     }

@@ -8,6 +8,7 @@ import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.dist.WiggleStorageFactory;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -121,7 +122,7 @@ class StepRecordingTest {
         ServerConfig config = new ServerConfig(TestPorts.free(), "step-io", url, url == null ? null : "sa", url == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        return url == null ? new WiggleServer(config).start()
+        return url == null ? new WiggleServer(config, new PostgresStorageFactory()).start()
                 : new WiggleServer(config, new WiggleStorageFactory()).start();
     }
 

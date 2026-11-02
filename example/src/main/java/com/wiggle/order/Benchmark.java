@@ -6,6 +6,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
@@ -24,8 +25,8 @@ import com.wiggle.client.flow.WiggleFlow;
  * into one call while SERVER/LOCAL_SYNC pay per step.
  *
  * <p>Instances are pre-submitted (they queue as READY) and only then are workers started, so the
- * timing isolates drain throughput from submission. All in one JVM (in-memory store) to remove
- * network and DB from the picture and measure the engine/transport overhead the mode controls.
+ * timing isolates drain throughput from submission. All in one JVM (an H2 database in memory) to remove
+ * network from the picture and measure the engine/transport overhead the mode controls.
  *
  * <pre>
  *   WIGGLE_EXECUTION_MODE=SERVER      ./gradlew :example:bench
@@ -46,7 +47,7 @@ public final class Benchmark {
         int batch = intEnv("WIGGLE_LOCAL_BATCH_SIZE", 64);
 
         // Point at a real database (WIGGLE_JDBC_URL) to see LOCAL_ASYNC's commit-batching win;
-        // with no URL it uses the in-memory store, where commits are ~free so async ~= sync.
+        // with no URL it uses an H2 database in memory, where commits are cheap.
         String jdbcUrl = env("WIGGLE_JDBC_URL", null);
         String jdbcUser = env("WIGGLE_JDBC_USER", null);
         String jdbcPassword = env("WIGGLE_JDBC_PASSWORD", null);
@@ -88,7 +89,7 @@ public final class Benchmark {
     /** In-memory with no URL; else JdbcStorage with the dialect picked from the URL (postgres / h2).
      *  Storage is an explicit factory (no ServiceLoader), so the benchmark wires it here. */
     static WiggleServer open(ServerConfig config, String jdbcUrl) throws Exception {
-        if (jdbcUrl == null) return new WiggleServer(config).start();
+        if (jdbcUrl == null) return new WiggleServer(config, new PostgresStorageFactory()).start();
         com.wiggle.jdbc.Dialect dialect = jdbcUrl.startsWith("jdbc:postgresql")
                 ? new com.wiggle.postgres.PostgresDialect() : new com.wiggle.postgres.H2Dialect();
         return new WiggleServer(config, cfg -> new com.wiggle.jdbc.JdbcStorage(

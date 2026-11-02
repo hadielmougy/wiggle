@@ -6,6 +6,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.EventView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -64,7 +65,7 @@ class EventFeedTest {
 
     @Test @DisplayName("a consumer reads the log from where it asked, and only an ack moves it on")
     void pullAndAck() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-feed", WorkerOptions.defaults()).registerHandler(new H())) {
             FlowSpec spec = spec();
@@ -119,7 +120,7 @@ class EventFeedTest {
 
     @Test @DisplayName("a long poll waits for an entry and returns it, or gives up empty at its deadline")
     void longPoll() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-feed-wait", WorkerOptions.defaults()).registerHandler(new H())) {
             FlowSpec spec = spec();
@@ -146,7 +147,7 @@ class EventFeedTest {
     @Test @DisplayName("retention keeps what the slowest consumer has not acknowledged")
     void retentionWaitsForConsumers() throws Exception {
         System.setProperty("wiggle.events.retentionMillis", "1");
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-feed-retain", WorkerOptions.defaults()).registerHandler(new H())) {
             FlowSpec spec = spec();

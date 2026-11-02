@@ -3,6 +3,7 @@ package com.wiggle.console;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.core.Tls;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.AuthCache;
@@ -64,7 +65,7 @@ class ConsoleUsersTest {
     }
 
     private static void withPortal(String builtinPassword, Body body) throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              ConsoleServer console = portal(server, builtinPassword)) {
             body.run("http://localhost:" + console.port(), HttpClient.newHttpClient());
         }
@@ -110,7 +111,7 @@ class ConsoleUsersTest {
 
     @Test @DisplayName("a session opened on one portal node is served by another, and a logout ends it on both")
     void sessionsAreShared() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              ConsoleServer one = portal(server, "root-pass");
              ConsoleServer two = portal(server, "root-pass")) {
             HttpClient http = HttpClient.newHttpClient();
@@ -163,7 +164,7 @@ class ConsoleUsersTest {
 
     @Test @DisplayName("first run: everything leads to the setup screen until the admin password is set, then never again")
     void firstRunSetup() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              ConsoleServer one = portal(server, null)) {
             HttpClient http = HttpClient.newHttpClient();
             String base = "http://localhost:" + one.port();

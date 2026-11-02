@@ -5,6 +5,7 @@ import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.ScheduleInfo;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.worker.Worker;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -38,7 +39,7 @@ class ScheduleClientTest {
         FlowSpec bpA = FlowSpec.define("schedc-probe-a", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         FlowSpec bpB = FlowSpec.define("schedc-probe-b", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "schedc-w")) {
             client.register(bpA);
@@ -80,7 +81,7 @@ class ScheduleClientTest {
     void createIsIdempotentPerWorkflow() throws Exception {
         FlowSpec bp = FlowSpec.define("schedc-probe-dup", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "schedc-w2")) {
             client.register(bp);

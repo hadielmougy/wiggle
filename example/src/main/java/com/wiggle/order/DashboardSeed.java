@@ -5,6 +5,7 @@ import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.console.Portal;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 
@@ -69,7 +70,7 @@ public final class DashboardSeed {
                 .thenApply(s::gather)
                 .thenApply(s::render));
 
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
              Portal portal = Portal.fromEnvironment(server, config.tls(), System.getenv()).orElseThrow();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "seed-worker")

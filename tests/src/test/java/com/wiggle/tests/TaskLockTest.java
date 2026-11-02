@@ -5,10 +5,10 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class TaskLockTest {
 
     private static Storage open(String backend) {
-        if (backend.equals("memory")) return new InMemoryStorage();
+        if (backend.equals("memory")) return PostgresStorageFactory.inMemory();
         JdbcStorage s = new JdbcStorage("jdbc:h2:mem:task-lock-" + System.nanoTime()
                 + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "", 2, new H2Dialect());
         s.migrate();

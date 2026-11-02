@@ -237,7 +237,7 @@ connection.
 has no unrouted entry point left. `ShardedStorage` routes over one `Storage` per shard. Verified by:
 
 - `tests/RoutedConformanceTest`: every engine scenario on a store that refuses an unrouted `inTx`;
-- `tests/ShardedConformanceTest`: every engine scenario on two in-memory shards, the first instance
+- `tests/ShardedConformanceTest`: every engine scenario on two H2 shards in memory, the first instance
   off the home shard;
 - `server/store/ShardedStorageTest` and `server/engine/ShardedEngineTest`: routing, unknown shards,
   and each path that only branches with more than one shard (claims, report batches, merged reads,
@@ -270,7 +270,7 @@ default <R> R readFor(String id, Freshness f, Function<ReadTx, R> work) { return
 Fan-out runs over `instanceShards()`, not a count: shard ids are permanent and may be sparse.
 
 **WGL-SHARD-071** (MUST) *Implemented.* `ShardedStorage` MUST live in the `server` module, MUST wrap one `Storage`
-per shard primary, and MUST depend on no JDBC type, so it runs over in-memory shards in tests.
+per shard primary, and MUST depend on no JDBC type.
 
 **WGL-SHARD-072** (MUST) *Implemented.* `ShardedStorage.inTx` (unrouted) MUST throw
 `IllegalStateException`. A
@@ -666,7 +666,7 @@ Search runs when a topology shard carries the `search` role, or on the one datab
   A filter on them is a semi-join on the value index, so it reads the matching rows, not the table.
 - **Document text.** The text is the correlation id, the context JSON, the termination reason and the
   error, capped at 64 KB. It is matched with Postgres `tsvector` over the `simple` configuration (words
-  as written, no stemming) and ranked by `ts_rank`. Other databases, and the in-memory store, match
+  as written, no stemming) and ranked by `ts_rank`. Other databases match
   word for word in Java with the same semantics.
 - **Shards and upkeep.** `SearchIndex` places, queries, retains (`WIGGLE_SEARCH_RETENTION_MILLIS`,
   default 30 days) and rebalances. `WIGGLE_SEARCH_WORKFLOWS` limits which workflows are indexed.

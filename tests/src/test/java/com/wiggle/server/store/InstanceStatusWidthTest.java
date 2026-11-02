@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * VARCHAR(16) and COMPENSATION_FAILED is nineteen characters, so the one status a saga reaches when
  * a compensator runs out of retries could not be written at all: the update failed, its transaction
  * rolled back, and the instance stayed COMPENSATING with the undo retrying forever. Only JDBC
- * deployments hit it, because the in-memory store holds the enum -- which is why the whole suite
+ * deployments hit it, because the in-memory store held the enum -- which is why the whole suite
  * passed. These cases fail on the old column width.
  */
 class InstanceStatusWidthTest {

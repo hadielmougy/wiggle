@@ -4,7 +4,6 @@ import com.wiggle.server.auth.Accounts;
 import com.wiggle.server.auth.AuthCache;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
 import com.wiggle.server.topology.Topology;
@@ -20,11 +19,9 @@ import java.util.List;
  * <p>A {@code WiggleServer} is the engine + control plane, over shared storage and a
  * {@link ClusterManager} (membership + leader election).
  *
- * <p>The server core is storage-agnostic. With no URL configured it uses the in-memory store; to
- * run on a database, pass a {@link StorageFactory} that knows how to build the store for the URL
- * (the standalone {@code wiggle-dist} distribution supplies one covering every backend). The
- * single-argument constructor is in-memory only, so an embedder that wants a database must use the
- * two-argument form.
+ * <p>The server core is storage-agnostic: the {@link StorageFactory} it is given builds the store for
+ * the configured URL ({@code wiggle-postgres} supplies one covering every backend, including an H2
+ * database in memory when no URL is set).
  */
 public final class WiggleServer implements AutoCloseable {
 
@@ -40,11 +37,6 @@ public final class WiggleServer implements AutoCloseable {
     private final Accounts accounts;
     private final AuthCache authCache;
 
-    /** In-memory only. To run on a database, use {@link #WiggleServer(ServerConfig, StorageFactory)}. */
-    public WiggleServer(ServerConfig config) throws IOException {
-        this(config, WiggleServer::inMemoryOnly);
-    }
-
     public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
@@ -58,14 +50,6 @@ public final class WiggleServer implements AutoCloseable {
                 topology == null ? 0 : topology.newestGeneration().id(),
                 topology == null ? () -> 0 : () -> topology.generationAt(System.currentTimeMillis()).id());
         this.bundle = new ServerBundle(config, storage, cluster, authCache);
-    }
-
-    /** The default factory: in-memory when no URL is set, otherwise a clear error pointing at the two-arg form. */
-    private static Storage inMemoryOnly(ServerConfig config) {
-        if (config.isInMemory()) return new InMemoryStorage();
-        throw new IllegalStateException("a storage URL is set ('" + config.jdbcUrl()
-                + "') but no StorageFactory was provided -- use WiggleServer(config, factory), or run the "
-                + "standalone distribution (wiggle-dist), which wires every backend by URL scheme");
     }
 
     public WiggleServer start() {

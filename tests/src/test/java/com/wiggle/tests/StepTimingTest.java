@@ -9,6 +9,7 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.NodeStats;
 import com.wiggle.core.NodeKind;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
@@ -59,7 +60,7 @@ class StepTimingTest {
         for (ExecutionMode mode : List.of(ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
             FlowSpec spec = FlowSpec.define("timed", 1, Map.class, Steps.class, (f, s) -> Modes.in(f, mode)
                     .thenApply(s::quick).thenApply(s::slow).thenFilter(s::keep).thenApply(s::last));
-            try (WiggleServer server = new WiggleServer(config()).start();
+            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker worker = new Worker(client, "w-" + mode, WorkerOptions.defaults().withConcurrency(2))
                          .registerHandler(new H())) {

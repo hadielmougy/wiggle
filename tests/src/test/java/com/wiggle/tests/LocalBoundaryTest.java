@@ -11,6 +11,7 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -78,7 +79,7 @@ class LocalBoundaryTest {
                 return Wiggle.allOf(left, right).combine(s::merge).thenApply(s::after);
             });
 
-            try (WiggleServer server = new WiggleServer(config()).start();
+            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker w = new Worker(client, "lb-" + Ids.next("x")).registerHandler(new ForkH(runs))) {
                 client.register(bp);
@@ -106,7 +107,7 @@ class LocalBoundaryTest {
                 .thenFilter(s::keep)
                 .thenApply(s::never));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "lb-" + Ids.next("x")).registerHandler(new GateH(downstream))) {
             client.register(bp);
@@ -141,7 +142,7 @@ class LocalBoundaryTest {
         FlowSpec specialBp = queueSplitFlowSpec(mode, "special", ranOn);
         assertEquals(generalBp.version(), specialBp.version(), "same topology, same version");
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker general = new Worker(client, "general",
                      WorkerOptions.defaults().withQueues("lb-queues"))

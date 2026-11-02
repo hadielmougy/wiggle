@@ -1,12 +1,12 @@
 package com.wiggle.client.flow;
 
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.tests.Reports;
 import com.wiggle.core.Json;
 import com.wiggle.core.ScratchKeys;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,7 +44,7 @@ class DeepNestingTest {
     @Test @DisplayName("100 levels of interleaved fork / forEach / doWhile complete, threading one counter through all of them")
     void hundredLevelsInterleaved() {
         FlowSpec bp = buildLevel(Workflow.define("deep-100", 1), DEPTH).build();
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             WorkflowEngine engine = new WorkflowEngine(storage, registry, 30_000);

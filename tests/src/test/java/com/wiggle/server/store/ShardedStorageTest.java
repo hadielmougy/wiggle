@@ -3,6 +3,8 @@ package com.wiggle.server.store;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
@@ -26,11 +28,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** What the sharded store itself guarantees: it routes, it refuses what it cannot route, and it owns its shards. */
 class ShardedStorageTest {
 
-    /** An in-memory store that records how many transactions reached it, and whether it was migrated
+    /** An H2 store that records how many transactions reached it, and whether it was migrated
      *  and closed. */
     private static class Probe implements Storage {
         final AtomicInteger txs = new AtomicInteger();
-        final InMemoryStorage mem = new InMemoryStorage();
+        final JdbcStorage mem = PostgresStorageFactory.inMemory();
         boolean migrated, closed;
         final String fingerprint;
 
@@ -39,7 +41,7 @@ class ShardedStorageTest {
         @Override public void migrate() { migrated = true; }
         @Override public <R> R inTx(Function<Tx, R> work) { txs.incrementAndGet(); return mem.inTx(work); }
         @Override public String fingerprint() { return fingerprint; }
-        @Override public void close() { closed = true; }
+        @Override public void close() { closed = true; mem.close(); }
     }
 
     /** A {@link Probe} whose database can be taken out of reach. */
@@ -145,7 +147,7 @@ class ShardedStorageTest {
 
     @Test @DisplayName("each database is claimed for its shard, and a database claimed for another shard is refused")
     void identityIsClaimedAndChecked() {
-        InMemoryStorage a = new InMemoryStorage(), b = new InMemoryStorage();
+        JdbcStorage a = PostgresStorageFactory.inMemory(), b = PostgresStorageFactory.inMemory();
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, a), member(1, ShardState.ACTIVE, b)), 0).migrate();
         assertEquals(0, a.inTx(tx -> tx.shardIdentity()).orElseThrow());
         assertEquals(1, b.inTx(tx -> tx.shardIdentity()).orElseThrow());
@@ -158,7 +160,7 @@ class ShardedStorageTest {
 
     @Test @DisplayName("the registry on home remembers every shard, and a state only moves forward")
     void registryMovesForward() {
-        InMemoryStorage home = new InMemoryStorage(), one = new InMemoryStorage();
+        JdbcStorage home = PostgresStorageFactory.inMemory(), one = PostgresStorageFactory.inMemory();
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
         assertEquals(List.of(0, 1), home.inTx(tx -> tx.shardRegistry()).stream().map(Rows.ShardRecord::shardId).toList());
 
@@ -172,7 +174,7 @@ class ShardedStorageTest {
 
     @Test @DisplayName("a shard the registry still holds live cannot be left out of the topology")
     void aLiveShardCannotBeOmitted() {
-        InMemoryStorage home = new InMemoryStorage(), one = new InMemoryStorage();
+        JdbcStorage home = PostgresStorageFactory.inMemory(), one = PostgresStorageFactory.inMemory();
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
         IllegalStateException e = assertThrows(IllegalStateException.class, () ->
                 new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home)), 0).migrate());
@@ -181,7 +183,7 @@ class ShardedStorageTest {
 
     @Test @DisplayName("a shard is retired only once empty; after that, an id naming it is not found")
     void retiring() {
-        InMemoryStorage home = new InMemoryStorage(), one = new InMemoryStorage();
+        JdbcStorage home = PostgresStorageFactory.inMemory(), one = PostgresStorageFactory.inMemory();
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
         Rows.Instance live = new Rows.Instance();
         live.id = "wfi.s1.live";
@@ -224,8 +226,8 @@ class ShardedStorageTest {
                 Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b)).combine(s::pick)).definition();
         WorkflowDefinition v2 = FlowSpec.define("grow", 2, Map.class, ForkSteps.class, (f, s) ->
                 Wiggle.allOf(f.thenApply(s::b), f.thenApply(s::a)).combine(s::pick)).definition();
-        InMemoryStorage home = new InMemoryStorage();
-        InMemoryStorage added = new InMemoryStorage();
+        JdbcStorage home = PostgresStorageFactory.inMemory();
+        JdbcStorage added = PostgresStorageFactory.inMemory();
 
         ShardedStorage before = new ShardedStorage(Map.of(0, home), 0);
         before.migrate();

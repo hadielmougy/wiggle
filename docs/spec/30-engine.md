@@ -354,7 +354,7 @@ errors; they are the recovery and at-least-once guarantees working.
 settling, retrying and cancelling all clear both.
 
 **WGL-ENG-112** (MUST) "Terminal" MUST mean "neither `RUNNING` nor `COMPENSATING`", and every place
-that encodes it (the view type, the JDBC purge query, the in-memory purge) MUST agree.
+that encodes it (the view type and the purge query) MUST agree.
 
 **WGL-ENG-113** (MUST) `LOCAL_SYNC` and `LOCAL_ASYNC` MUST NOT be a third state machine: every worker
 reports through the same entry point and a run of steps walks the same transitions one at a time.

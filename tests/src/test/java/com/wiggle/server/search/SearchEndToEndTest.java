@@ -7,6 +7,7 @@ import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Tls;
 import com.wiggle.core.criteria.AttrType;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -60,7 +61,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("an instance is found by the words in its context, its correlation id, and its filters")
     void findsByContext() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.OFF)).start();
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.OFF), new PostgresStorageFactory()).start();
              WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
             c.register(ORDERS);
             c.register(BILLING);
@@ -90,7 +91,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("a caller sees only hits in the workflows its role may read")
     void scopedToReadableWorkflows() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.ENFORCE)).start()) {
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
             server.accounts().putRole("ops", "orders-reader", List.of("read:orders"), true);
             String adminKey = server.accounts().createApiKey("ops", "root", "admin", null);
             String ordersKey = server.accounts().createApiKey("ops", "orders", "orders-reader", null);
@@ -111,7 +112,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("with search off, a search fails as a precondition and nothing is indexed")
     void off() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(false, ServerConfig.ApiAuth.OFF)).start();
+        try (WiggleServer server = new WiggleServer(config(false, ServerConfig.ApiAuth.OFF), new PostgresStorageFactory()).start();
              WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
             assertTrue(server.search().isEmpty());
             assertEquals(409, assertThrows(WiggleApiException.class,
@@ -127,7 +128,7 @@ class SearchEndToEndTest {
 
     @Test @DisplayName("instances are found by the search attributes their flow declares, with or without words")
     void findsByDeclaredAttributes() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.OFF)).start();
+        try (WiggleServer server = new WiggleServer(config(true, ServerConfig.ApiAuth.OFF), new PostgresStorageFactory()).start();
              WiggleClient c = new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, null)) {
             c.register(SHIPMENTS);
             c.register(ORDERS);

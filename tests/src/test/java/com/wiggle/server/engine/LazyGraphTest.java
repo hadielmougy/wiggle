@@ -2,7 +2,7 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.Node;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,7 +37,7 @@ class LazyGraphTest {
     @Test @DisplayName("a graph larger than the LRU stays correct through eviction and re-access")
     void evictionIsTransparent() {
         WorkflowDefinition def = longChain();
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             new DefinitionRegistry(storage).register(def);
             storage.inTxVoid(tx -> {
@@ -58,7 +58,7 @@ class LazyGraphTest {
     @Test @DisplayName("an unknown node and a missing definition fail with clear errors")
     void failsClearly() {
         WorkflowDefinition def = longChain();
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             new DefinitionRegistry(storage).register(def);
             storage.inTxVoid(tx -> {

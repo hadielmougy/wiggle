@@ -1,7 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.core.InstanceView;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Token;
@@ -190,14 +190,14 @@ class StateChartTest {
     }
 
     /**
-     * The terminal rule is written down three times -- InstanceView, the JDBC purge query and the
-     * in-memory purge. This pins the in-memory copy to the chart behaviourally, so a new status
-     * that nobody classified is purged (or kept) loudly rather than silently.
+     * The terminal rule is written down twice -- InstanceView and the purge query. This pins the
+     * query to the chart behaviourally, so a new status that nobody classified is purged (or kept)
+     * loudly rather than silently.
      */
     @Test
-    @DisplayName("the in-memory purge treats exactly the chart's terminal states as terminal")
-    void inMemoryPurgeAgreesWithTheChart() {
-        Storage storage = new InMemoryStorage();
+    @DisplayName("the purge treats exactly the chart's terminal states as terminal")
+    void purgeAgreesWithTheChart() {
+        Storage storage = PostgresStorageFactory.inMemory();
         for (InstanceStatus s : InstanceStatus.values()) {
             storage.inTxVoid(tx -> {
                 Instance i = new Instance();
@@ -215,7 +215,7 @@ class StateChartTest {
                 .filter(s -> storage.inTx(tx -> tx.findInstance("wfi_" + s.name()).isPresent()))
                 .map(Enum::name).collect(Collectors.toCollection(LinkedHashSet::new));
         assertEquals(kind(StateChart.instances(), "live"), survived,
-                "the in-memory purge and the chart disagree about which states are terminal");
+                "the purge and the chart disagree about which states are terminal");
     }
 
     @Test

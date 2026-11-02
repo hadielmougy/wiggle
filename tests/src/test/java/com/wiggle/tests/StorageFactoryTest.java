@@ -1,10 +1,10 @@
 package com.wiggle.tests;
 
+import com.wiggle.core.InstanceStatus;
 import com.wiggle.dist.WiggleStorageFactory;
+import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
@@ -30,10 +30,11 @@ class StorageFactoryTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
-    @Test @DisplayName("no URL yields the in-memory store")
+    @Test @DisplayName("no URL yields an empty, migrated H2 database in memory")
     void inMemory() {
         try (Storage s = new WiggleStorageFactory().create(config(null))) {
-            assertInstanceOf(InMemoryStorage.class, s);
+            assertInstanceOf(JdbcStorage.class, s);
+            assertEquals(0, (int) s.inTx(tx -> tx.countInstances(InstanceStatus.RUNNING)), "migrated and empty");
         }
     }
 
@@ -52,14 +53,6 @@ class StorageFactoryTest {
                 () -> new WiggleStorageFactory().create(config("jdbc:db2://localhost/nope")));
         assertTrue(e.getMessage().contains("jdbc:db2://localhost/nope"), e.getMessage());
         assertTrue(e.getMessage().contains("no storage backend"), e.getMessage());
-    }
-
-    @Test @DisplayName("the default in-memory-only server rejects a storage URL with a clear message")
-    void defaultFactoryRejectsUrl() {
-        IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> new WiggleServer(config("jdbc:postgresql://localhost/nope")));
-        assertTrue(e.getMessage().contains("no StorageFactory"), e.getMessage());
-        assertTrue(e.getMessage().contains("jdbc:postgresql://localhost/nope"), "names the offending URL");
     }
 
     @Test @DisplayName("the published factory is the same mapping the distribution runs")

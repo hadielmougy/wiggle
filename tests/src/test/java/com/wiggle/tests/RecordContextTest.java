@@ -9,6 +9,7 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.InstanceView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -80,7 +81,7 @@ class RecordContextTest {
     @Test @DisplayName("a record context survives gate, fork merge and typed decode end to end")
     void recordRoundTripThroughEngine() throws Exception {
         FlowSpec bp = flowSpec();
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
             client.register(bp);
@@ -103,7 +104,7 @@ class RecordContextTest {
     @Test @DisplayName("a false gate on a record context ends the instance as gated")
     void recordGateShortCircuits() throws Exception {
         FlowSpec bp = flowSpec();
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
             client.register(bp);

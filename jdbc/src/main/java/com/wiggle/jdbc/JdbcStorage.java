@@ -405,8 +405,8 @@ public final class JdbcStorage implements Storage {
             // join_stack is one group id (a token id, plus "#width" for a dynamic fan-out) per
             // enclosing fork/forEach, comma-separated -- so its length is proportional to NESTING
             // DEPTH, and VARCHAR(1000) capped nesting at roughly 38 levels with a raw
-            // "value too long" from the driver. Nothing else bounds depth: the in-memory store
-            // holds a plain String, which is why only JDBC deployments hit it. TEXT, like the
+            // "value too long" from the driver. Nothing else bounded depth: the in-memory store
+            // held a plain String, which is why only JDBC deployments hit it. TEXT, like the
             // other unbounded columns (payload, context, error).
             new Migration(10, "unbounded-join-stack", """
             ALTER TABLE wf_token ALTER COLUMN join_stack TYPE TEXT;
@@ -503,7 +503,7 @@ public final class JdbcStorage implements Storage {
             // wf_instance.status was VARCHAR(16), and COMPENSATION_FAILED is nineteen characters:
             // the one status a saga reaches when a compensator runs out of retries could not be
             // written at all, so the update rolled back and the instance stayed COMPENSATING with
-            // its undo retrying forever. Only JDBC deployments hit it -- the in-memory store holds
+            // its undo retrying forever. Only JDBC deployments hit it -- the in-memory store held
             // the enum, which is why every test passed. 32 leaves room for a longer status later.
             new Migration(18, "instance-status-width", """
             ALTER TABLE wf_instance ALTER COLUMN status TYPE VARCHAR(32);

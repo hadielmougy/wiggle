@@ -1,5 +1,7 @@
 package com.wiggle.server.store;
 
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -17,7 +19,7 @@ class ShardTransactionsTest {
 
     @Test @DisplayName("the repositories run on the transaction bound for the thread, and refuse without one")
     void repositoriesFollowTheBoundTransaction() {
-        try (InMemoryStorage store = new InMemoryStorage()) {
+        try (JdbcStorage store = PostgresStorageFactory.inMemory()) {
             ShardTransactions shards = new ShardTransactions(store);
             shards.inHome(() -> Repositories.schedules().putSchedule(schedule("s1")));
             assertTrue(shards.readHome(() -> Repositories.schedules().scheduleByWorkflow("w-s1")).isPresent());
@@ -28,7 +30,7 @@ class ShardTransactionsTest {
 
     @Test @DisplayName("a read inside a transaction on the same shard joins it; on another shard it gets its own")
     void readsJoinOnTheSameShardOnly() {
-        try (InMemoryStorage seven = new InMemoryStorage(); InMemoryStorage two = new InMemoryStorage()) {
+        try (JdbcStorage seven = PostgresStorageFactory.inMemory(); JdbcStorage two = PostgresStorageFactory.inMemory()) {
             ShardTransactions shards = new ShardTransactions(new ShardedStorage(Map.of(7, seven, 2, two), 2));
             shards.forInstance(ON_SEVEN, () -> {
                 ReadTx outer = CurrentTx.require();
@@ -41,7 +43,7 @@ class ShardTransactionsTest {
 
     @Test @DisplayName("a write inside a write on the same shard joins it; on another shard it is refused")
     void writesJoinOrAreRefused() {
-        try (InMemoryStorage seven = new InMemoryStorage(); InMemoryStorage two = new InMemoryStorage()) {
+        try (JdbcStorage seven = PostgresStorageFactory.inMemory(); JdbcStorage two = PostgresStorageFactory.inMemory()) {
             ShardTransactions shards = new ShardTransactions(new ShardedStorage(Map.of(7, seven, 2, two), 2));
             shards.forInstance(ON_SEVEN, () -> {
                 ReadTx outer = CurrentTx.require();

@@ -8,6 +8,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -99,7 +100,7 @@ class VersionScopedWorkerTest {
         AtomicInteger aRuns = new AtomicInteger();
         AtomicInteger bRuns = new AtomicInteger();
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec one = v1();
@@ -143,7 +144,7 @@ class VersionScopedWorkerTest {
     void unversionedWorkerServesEveryVersion() throws Exception {
         AtomicInteger runs = new AtomicInteger();
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec one = v1();
@@ -168,7 +169,7 @@ class VersionScopedWorkerTest {
     @Test
     @DisplayName("binding a version that is not registered fails at startup, not at the first task")
     void bindingAnUnknownVersionFailsFast() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec one = v1();

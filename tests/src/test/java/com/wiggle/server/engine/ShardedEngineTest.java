@@ -5,10 +5,11 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.ShardIds;
 import com.wiggle.core.TaskActivation;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.tests.Modes;
@@ -42,10 +43,10 @@ class ShardedEngineTest {
             (f, s) -> Modes.in(f, ExecutionMode.LOCAL_ASYNC).thenApply(s::x).thenApply(s::y));
 
     /** Shard 1 first, so the first instance lands off the home shard (0). */
-    private record Fixture(InMemoryStorage one, InMemoryStorage zero, ShardedStorage storage, WorkflowEngine engine) {
+    private record Fixture(JdbcStorage one, JdbcStorage zero, ShardedStorage storage, WorkflowEngine engine) {
         static Fixture open() {
-            InMemoryStorage one = new InMemoryStorage();
-            InMemoryStorage zero = new InMemoryStorage();
+            JdbcStorage one = PostgresStorageFactory.inMemory();
+            JdbcStorage zero = PostgresStorageFactory.inMemory();
             Map<Integer, Storage> shards = new LinkedHashMap<>();
             shards.put(1, one);
             shards.put(0, zero);

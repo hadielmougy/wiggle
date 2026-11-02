@@ -4,6 +4,8 @@ import com.wiggle.core.Json;
 import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.WorkflowDefinition;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefaultLazyGraph;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,12 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Contract test for the {@link GraphStore} half of the store -- the immutable definition/graph
- * reference data -- exercised through {@link InMemoryStorage}. It documents the interface's
+ * reference data -- exercised on H2. It documents the interface's
  * behaviour independently of the engine ({@link DefaultLazyGraph} tests the
  * lazy view; {@code JdbcGraphTest} the JDBC row normalisation).
- *
- * <p>Being one backend, it cannot catch the two drifting apart: that is {@link StorageContract},
- * which asserts the clauses both have to answer and runs them against each.
  */
 class GraphStoreTest {
 
@@ -67,7 +66,7 @@ class GraphStoreTest {
     @Test
     @DisplayName("the definition blob round-trips; an unknown one is absent")
     void definitionBlobRoundTrips() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowDefinition d = def("orders", false);
             register(storage, d);
@@ -83,7 +82,7 @@ class GraphStoreTest {
     @Test
     @DisplayName("latestVersion is the highest registered version, and empty for an unknown name")
     void latestVersion() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowDefinition v1 = def("orders", 1, false);
             WorkflowDefinition v2 = def("orders", 2, true);
@@ -104,7 +103,7 @@ class GraphStoreTest {
     @Test
     @DisplayName("definitionNames lists each registered name once, sorted")
     void definitionNames() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             register(storage, def("beta", false));
             register(storage, def("alpha", false));
@@ -116,7 +115,7 @@ class GraphStoreTest {
     @Test
     @DisplayName("putGraph normalises the graph so a single node and its edges can be read back")
     void graphNodeReconstructsEdges() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowDefinition d = def("orders", false);
             register(storage, d);
@@ -138,7 +137,7 @@ class GraphStoreTest {
     @Test
     @DisplayName("reads for an unknown node, version, or workflow are absent")
     void unknownReadsAreEmpty() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowDefinition d = def("orders", false);
             register(storage, d);
@@ -154,7 +153,7 @@ class GraphStoreTest {
     @Test
     @DisplayName("re-registering the same version is an idempotent no-op")
     void reRegisterIsIdempotent() {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             WorkflowDefinition d = def("orders", false);
             register(storage, d);

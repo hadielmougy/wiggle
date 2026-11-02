@@ -3,7 +3,6 @@ package com.wiggle.tests;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
 import com.wiggle.postgres.PostgresDialect;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
@@ -14,8 +13,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * The event log's storage contract, against both backends: the in-memory store and the real SQL
- * (H2 by default, a live database when one is configured).
+ * The event log's storage contract, on H2 by default and on a live database when one is configured.
  *
  * <p>A shared database other tests also write to is fine, but only because every assertion is made
  * relative to what the log already held. Reads are scoped by the head seq captured on entry. The
@@ -36,14 +34,6 @@ class EventStoreTest {
     private static Rows.Event event(String instance, String type, long at) {
         return new Rows.Event(0, instance, "store-flow", 1, "key-" + instance, type, null, 1,
                 "{\"reason\":\"" + type + "\"}", at);
-    }
-
-    @Test @DisplayName("in memory: append, read, cursors and trim behave as the feed expects")
-    void inMemory() {
-        try (Storage storage = new InMemoryStorage()) {
-            storage.migrate();
-            roundTrip(storage);
-        }
     }
 
     @Test @DisplayName("on SQL: append, read, cursors and trim behave as the feed expects")

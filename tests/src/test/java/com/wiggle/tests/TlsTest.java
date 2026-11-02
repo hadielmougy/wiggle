@@ -4,6 +4,7 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Tls;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -78,7 +79,7 @@ class TlsTest {
     @Test @DisplayName("API server-side TLS: a trusting client works, a plaintext client is refused")
     void apiServerTls() throws Exception {
         ServerConfig config = serverConfig(opts(serverKs, null), 0, null);   // keystore only
-        try (WiggleServer server = new WiggleServer(config).start()) {
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
             Tls.Options clientTls = opts(null, trust);   // trusts the server, no client cert
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), clientTls);
@@ -99,7 +100,7 @@ class TlsTest {
     @Test @DisplayName("API mTLS: a client with a trusted cert works, one without a cert is rejected")
     void apiMutualTls() throws Exception {
         ServerConfig config = serverConfig(opts(serverKs, trust), 0, null);   // keystore + truststore => mTLS
-        try (WiggleServer server = new WiggleServer(config).start()) {
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
 
             try (WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust));   // presents a cert
                  Worker w = new Worker(client, "mtls-w").registerHandler(new WorkHandlers())) {
@@ -121,7 +122,7 @@ class TlsTest {
     void apiCertificateCredential() throws Exception {
         ServerConfig config = serverConfig(opts(serverKs, trust), 0, null)
                 .withAuth(new ServerConfig.Auth(ServerConfig.ApiAuth.ENFORCE, Duration.ofSeconds(30)));
-        try (WiggleServer server = new WiggleServer(config).start();
+        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl(), opts(clientKs, trust))) {
             WiggleClient.WiggleApiException refused = assertThrows(WiggleClient.WiggleApiException.class, client::cluster);
             assertEquals(401, refused.status(), "a trusted certificate with no credential is not enough");

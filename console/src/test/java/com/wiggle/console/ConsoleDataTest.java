@@ -8,6 +8,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.NodeStats;
 import com.wiggle.core.InstanceView;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -47,7 +48,7 @@ class ConsoleDataTest {
 
     @Test @DisplayName("lists, details, and cancels instances")
     void directMode() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             c.register(wf());
@@ -79,7 +80,7 @@ class ConsoleDataTest {
 
     @Test @DisplayName("pending signal waits are listed, and a signal delivered through the seam clears one")
     void pendingSignals() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             c.register(FlowSpec.define("waits", 1, Map.class, Steps.class, (f, s) -> f.thenAwait("approved")));
@@ -118,7 +119,7 @@ class ConsoleDataTest {
 
     @Test @DisplayName("step stats read through the seam, slowest first")
     void stepStats() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             long before = System.currentTimeMillis();
             runTimed(conn.client(), 2);
@@ -156,7 +157,7 @@ class ConsoleDataTest {
 
     @Test @DisplayName("created branches: a wf.branches_created entry, and each step scoped to the step that created it")
     void createdBranchesAreScoped() throws Exception {
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              DirectConnection conn = WiggleConnection.direct(server.baseUrl());
              Worker w = new Worker(conn.client(), "spawn-w").registerHandler(new SpawnH())) {
             WiggleClient c = conn.client();

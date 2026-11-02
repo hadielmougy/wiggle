@@ -5,7 +5,7 @@ import com.wiggle.core.Ids;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.TaskActivation;
 import com.wiggle.core.TokenStatus;
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.AfterEach;
@@ -36,7 +36,7 @@ class RetryParkingTest {
     @BeforeEach
     void open() {
         System.setProperty("wiggle.retry.timerMinMillis", "100");
-        storage = new InMemoryStorage();
+        storage = PostgresStorageFactory.inMemory();
         storage.migrate();
         engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), 30_000);
     }

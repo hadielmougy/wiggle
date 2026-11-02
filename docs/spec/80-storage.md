@@ -27,15 +27,15 @@ cells that reuse a cell id are still distinguishable.
 functional interface — and MUST NOT discover it by `ServiceLoader`.
 
 **WGL-STOR-007** (MUST) `PostgresStorageFactory` MUST map the JDBC URL scheme to a backend:
-`jdbc:postgresql:` → the PostgreSQL dialect, `jdbc:h2:` → the H2 dialect, no URL → the in-memory
-store. Any other URL MUST fail with a message naming what is supported.
+`jdbc:postgresql:` → the PostgreSQL dialect, `jdbc:h2:` → the H2 dialect, no URL → a new H2
+database in memory. Any other URL MUST fail with a message naming what is supported.
 
 *Verified by:* `server/store/StorageContract` (run against every backend), `tests/StorageFactoryTest`, `tests/DialectTest`.
 
 ## 2. Backends
 
-**WGL-STOR-010** (MUST) **In-memory** MUST be the backend when no JDBC URL is configured: single node,
-for development and tests. It MUST implement the same `Tx` contract, including instance locking.
+**WGL-STOR-010** (MUST) With no JDBC URL configured the backend MUST be H2 on a new database in memory,
+dropped when its store closes: single node, for development and tests.
 
 **WGL-STOR-011** (MUST) **PostgreSQL** MUST be the supported deployment backend.
 
@@ -48,7 +48,7 @@ runtime and no per-database build exists.
 **WGL-STOR-014** (MUST) JDBC connections MUST come from a HikariCP pool sized by
 `WIGGLE_JDBC_POOL_SIZE`.
 
-*Verified by:* `server/store/StorageContract`, one subclass per backend (`InMemoryStorageContractTest`, `JdbcStorageContractTest` -- H2 by default, whatever `WIGGLE_TEST_DB_URL` names when one is set).
+*Verified by:* `server/store/StorageContract`, through `JdbcStorageContractTest` (H2 by default, whatever `WIGGLE_TEST_DB_URL` names when one is set).
 
 ## 3. Dialect seam
 
@@ -181,8 +181,8 @@ so an in-flight instance keeps decoding across an upgrade.
 **WGL-STOR-060** (MUST) The leader MUST purge **terminal** instances older than `WIGGLE_RETENTION_MILLIS`
 (default 24 h), in bounded batches, together with their tokens.
 
-**WGL-STOR-061** (MUST) "Terminal" MUST be the same test everywhere it is encoded (the view type, the
-JDBC purge query, the in-memory purge).
+**WGL-STOR-061** (MUST) "Terminal" MUST be the same test everywhere it is encoded (the view type and the
+purge query).
 
 **WGL-STOR-062** (MUST) The same sweep MUST trim the event log per [WGL-EVT-030](60-event-log.md).
 

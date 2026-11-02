@@ -7,9 +7,9 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.TaskActivation;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.WorkflowEngine.Run;
 import com.wiggle.server.engine.WorkflowEngine.StepInput;
-import com.wiggle.server.store.InMemoryStorage;
 import com.wiggle.server.store.Storage;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -62,7 +62,7 @@ class SpawnsTest {
     }
 
     private static void withEngine(FlowSpec spec, java.util.function.Consumer<WorkflowEngine> body) {
-        try (Storage storage = new InMemoryStorage()) {
+        try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(spec.definition());

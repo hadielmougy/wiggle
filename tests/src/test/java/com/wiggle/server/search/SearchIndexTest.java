@@ -1,6 +1,7 @@
 package com.wiggle.server.search;
 
-import com.wiggle.server.store.InMemoryStorage;
+import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.ShardState;
 import com.wiggle.server.store.ShardedStorage;
@@ -26,7 +27,7 @@ class SearchIndexTest {
 
     /** An in-memory shard that can be taken down. */
     private static final class Shard implements Storage {
-        final InMemoryStorage mem = new InMemoryStorage();
+        final JdbcStorage mem = PostgresStorageFactory.inMemory();
         volatile boolean down;
 
         @Override public void migrate() { }
@@ -46,7 +47,7 @@ class SearchIndexTest {
 
     private ShardedStorage storage() {
         List<ShardedStorage.Member> members = new ArrayList<>();
-        members.add(new ShardedStorage.Member(0, ShardState.ACTIVE, true, new InMemoryStorage()));
+        members.add(new ShardedStorage.Member(0, ShardState.ACTIVE, true, PostgresStorageFactory.inMemory()));
         for (int i = 1; i <= 3; i++) {
             Shard s = shards.computeIfAbsent(i, k -> new Shard());
             members.add(new ShardedStorage.Member(i, ShardState.ACTIVE, false, s));

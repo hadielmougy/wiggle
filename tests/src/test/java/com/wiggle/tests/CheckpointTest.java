@@ -7,6 +7,7 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
@@ -93,7 +94,7 @@ class CheckpointTest {
                 .thenApply(s::b)
                 .thenApply(s::c));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "cp-w").registerHandler(new FlushH(bRunning, releaseB))) {
             client.register(bp);
@@ -127,7 +128,7 @@ class CheckpointTest {
                 .thenApply(s::b)
                 .thenApply(s::c));
 
-        try (WiggleServer server = new WiggleServer(config()).start();
+        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "cp-w2").registerHandler(new NobufH(bRunning, releaseB))) {
             client.register(bp);
