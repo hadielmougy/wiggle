@@ -42,6 +42,20 @@ class PortalPortTest {
         }
     }
 
+    @Test @DisplayName("both ports speak HTTP/2 in plaintext (h2c) as well as HTTP/1.1")
+    void http2Cleartext() throws Exception {
+        try (HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_2).build()) {
+            for (int port : new int[] {PORTAL, API}) {
+                HttpResponse<Void> response = http.send(HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + (port == API ? "/v1/HealthCheck" : "/healthz")))
+                        .method(port == API ? "POST" : "GET", HttpRequest.BodyPublishers.noBody()).build(),
+                        HttpResponse.BodyHandlers.discarding());
+                assertEquals(200, response.statusCode());
+                assertEquals(HttpClient.Version.HTTP_2, response.version(), "port " + port);
+            }
+        }
+    }
+
     @Test @DisplayName("the API is not served on the portal's port, nor the portal on the API's")
     void eachPortItsOwnPaths() throws Exception {
         try (HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()) {

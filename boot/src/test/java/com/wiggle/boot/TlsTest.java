@@ -60,12 +60,18 @@ class TlsTest {
         }
     }
 
-    @Test @DisplayName("the portal is served over the same TLS, and not in plaintext")
+    @Test @DisplayName("the portal is served over the same TLS, and not in plaintext; both ports speak h2 over TLS")
     void portalOverTls() throws Exception {
         try (HttpClient https = HttpClient.newBuilder().sslContext(Tls.sslContext(client(true))).build();
              HttpClient plain = HttpClient.newHttpClient()) {
-            assertEquals(200, https.send(HttpRequest.newBuilder(URI.create("https://localhost:" + PORTAL + "/healthz")).build(),
-                    HttpResponse.BodyHandlers.discarding()).statusCode());
+            HttpResponse<Void> portal = https.send(HttpRequest.newBuilder(URI.create("https://localhost:" + PORTAL + "/healthz")).build(),
+                    HttpResponse.BodyHandlers.discarding());
+            assertEquals(200, portal.statusCode());
+            assertEquals(HttpClient.Version.HTTP_2, portal.version(), "h2, negotiated by ALPN");
+            HttpResponse<Void> api = https.send(HttpRequest.newBuilder(URI.create("https://localhost:" + API + "/v1/HealthCheck"))
+                    .POST(HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.discarding());
+            assertEquals(200, api.statusCode());
+            assertEquals(HttpClient.Version.HTTP_2, api.version(), "h2, negotiated by ALPN");
             assertEquals(400, plain.send(HttpRequest.newBuilder(URI.create("http://localhost:" + PORTAL + "/healthz")).build(),
                     HttpResponse.BodyHandlers.discarding()).statusCode(), "Tomcat answers plaintext on a TLS port with 400");
         }

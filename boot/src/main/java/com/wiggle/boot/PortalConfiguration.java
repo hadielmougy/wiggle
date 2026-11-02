@@ -8,6 +8,7 @@ import com.wiggle.server.WiggleServer;
 import com.wiggle.server.http.TomcatTls;
 import jakarta.servlet.Filter;
 import org.apache.catalina.connector.Connector;
+import org.apache.coyote.http2.Http2Protocol;
 import org.apache.tomcat.util.threads.VirtualThreadExecutor;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
@@ -59,6 +60,7 @@ class PortalConfiguration {
             Connector connector = new Connector();
             connector.setPort(port.value());
             if (config.tls().hasKeyStore()) TomcatTls.configure(connector, config.tls());
+            connector.addUpgradeProtocol(new Http2Protocol());
             connector.getProtocolHandler().setExecutor(new VirtualThreadExecutor("portal-"));
             factory.addAdditionalConnectors(connector);
         };

@@ -8,6 +8,7 @@ import com.wiggle.server.WiggleServer;
 import com.wiggle.server.api.ApiServlet;
 import com.wiggle.server.http.TomcatTls;
 import com.wiggle.server.store.StorageFactory;
+import org.apache.coyote.http2.Http2Protocol;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
@@ -52,11 +53,15 @@ class NodeConfiguration {
         return new ServletRegistrationBean<>(server.apiServlet(), ControlPlane.PREFIX + "*");
     }
 
-    /** The web server listens on {@code WIGGLE_PORT}, over TLS when {@code WIGGLE_TLS_KEYSTORE} is set. */
+    /**
+     * The web server listens on {@code WIGGLE_PORT}, over TLS when {@code WIGGLE_TLS_KEYSTORE} is set, and
+     * speaks HTTP/2 as well as HTTP/1.1: h2 over TLS, h2c in plaintext.
+     */
     @Bean
     WebServerFactoryCustomizer<TomcatServletWebServerFactory> apiPort(ServerConfig config) {
         return factory -> {
             factory.setPort(config.port());
+            factory.addConnectorCustomizers(connector -> connector.addUpgradeProtocol(new Http2Protocol()));
             if (config.tls().hasKeyStore()) {
                 factory.addConnectorCustomizers(connector -> TomcatTls.configure(connector, config.tls()));
             } else {
