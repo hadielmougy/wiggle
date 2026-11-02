@@ -2,8 +2,6 @@ package com.wiggle.server.engine;
 
 import com.wiggle.core.*;
 import com.wiggle.core.criteria.QueueCriteria;
-import com.wiggle.server.store.BufferedTx;
-import com.wiggle.server.store.CurrentTx;
 import com.wiggle.server.store.*;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
@@ -637,18 +635,15 @@ public final class WorkflowEngine {
     }
 
     /**
-     * Runs {@code body} over a write-buffered view of the open transaction, flushing before it
+     * Runs {@code body} with the open transaction's token and instance writes held back until it
      * commits. Every transaction that locks an instance runs this way: the lock is held until commit
      * and every other mutation of that instance waits on it, so its writes go out together at the
      * end, not one round trip each, and a token inserted and moved on is written once. A store whose
-     * transactions do not roll back gets the body as it is.
+     * transactions do not roll back writes as it goes.
      */
     private static <R> R buffered(java.util.function.Supplier<R> body) {
-        if (!Repositories.transactional()) return body.get();
-        BufferedTx tx = BufferedTx.of(CurrentTx.requireWrite());
-        R result = CurrentTx.rebind(tx, body);
-        tx.flush();
-        return result;
+        Repositories.bufferWrites();
+        return body.get();
     }
 
     private static void bufferedVoid(Runnable body) {

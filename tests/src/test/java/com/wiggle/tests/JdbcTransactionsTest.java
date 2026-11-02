@@ -1,7 +1,13 @@
 package com.wiggle.tests;
 
+import com.wiggle.core.Doc;
+import com.wiggle.core.InstanceStatus;
+import com.wiggle.core.NodeKind;
+import com.wiggle.core.TokenStatus;
 import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.jdbc.StatementListener;
 import com.wiggle.postgres.H2Dialect;
+import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
@@ -18,6 +24,8 @@ import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.logging.Logger;
@@ -30,8 +38,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The store's transaction boundary, run through Spring's transaction manager: over a pool the caller
- * owns, with a commit whose outcome is unknown, nested, outside a transaction, and with no connection
- * to be had.
+ * owns, with a commit whose outcome is unknown, nested, outside a transaction, with its writes held
+ * back, and with no connection to be had.
  */
 class JdbcTransactionsTest {
 
@@ -102,6 +110,83 @@ class JdbcTransactionsTest {
             IllegalStateException e = assertThrows(IllegalStateException.class, () -> escaped.definition("x", 1));
             assertTrue(e.getMessage().contains("no transaction"), e.getMessage());
         }
+    }
+
+    @Test @DisplayName("held-back writes reach the database before the next statement, and at commit")
+    void heldBackWritesReachTheDatabase() {
+        try (HikariDataSource ds = pool("held"); JdbcStorage storage = store(ds)) {
+            Rows.Instance i = instance("wfi-held");
+            Rows.Token t = token(i, "tok-held");
+            List<String> statements = new ArrayList<>();
+            try (JdbcStorage.Observation watch = storage.observe(listener(statements))) {
+                storage.inTxVoid(tx -> {
+                    tx.insertInstance(i);
+                    tx.bufferWrites();
+                    tx.insertToken(t);
+                    t.status = TokenStatus.RUNNING;
+                    tx.updateToken(t);
+                    assertTrue(statements.stream().noneMatch(sql -> sql.contains("wf_token")), "nothing written yet");
+                    assertEquals(TokenStatus.RUNNING, tx.findToken(t.id).orElseThrow().status,
+                            "a read in the transaction sees the held-back writes");
+                });
+            }
+            assertEquals(1, statements.stream().filter(sql -> sql.startsWith("INSERT INTO wf_token ")).count(),
+                    "a token inserted and moved on is one insert");
+            assertEquals(0, statements.stream().filter(sql -> sql.startsWith("UPDATE wf_token ")).count());
+
+            Rows.Token late = token(i, "tok-late");
+            storage.inTxVoid(tx -> {
+                tx.bufferWrites();
+                tx.insertToken(late);
+            });
+            assertTrue(storage.inTx(tx -> tx.findToken(late.id)).isPresent(), "written at commit, with no read before it");
+        }
+    }
+
+    @Test @DisplayName("held-back writes of a transaction that throws are never written")
+    void heldBackWritesRollBack() {
+        try (HikariDataSource ds = pool("held-rollback"); JdbcStorage storage = store(ds)) {
+            Rows.Instance i = instance("wfi-gone");
+            Rows.Token t = token(i, "tok-gone");
+            assertThrows(IllegalStateException.class, () -> storage.inTxVoid(tx -> {
+                tx.insertInstance(i);
+                tx.bufferWrites();
+                tx.insertToken(t);
+                throw new IllegalStateException("abandoned");
+            }));
+            assertFalse(storage.inTx(tx -> tx.findInstance(i.id)).isPresent());
+            assertFalse(storage.inTx(tx -> tx.findToken(t.id)).isPresent());
+        }
+    }
+
+    private static StatementListener listener(List<String> statements) {
+        return new StatementListener() {
+            @Override public void executed(String sql) { statements.add(sql.strip()); }
+            @Override public void committed() { }
+        };
+    }
+
+    private static Rows.Instance instance(String id) {
+        Rows.Instance i = new Rows.Instance();
+        i.id = id;
+        i.workflow = "w";
+        i.version = 1;
+        i.context = Doc.EMPTY;
+        i.status = InstanceStatus.RUNNING;
+        return i;
+    }
+
+    private static Rows.Token token(Rows.Instance of, String id) {
+        Rows.Token t = new Rows.Token();
+        t.id = id;
+        t.instanceId = of.id;
+        t.workflow = of.workflow;
+        t.version = of.version;
+        t.nodeId = "n1";
+        t.kind = NodeKind.TASK;
+        t.status = TokenStatus.READY;
+        t.activity = "w#step";
+        return t;
     }
 
     @Test @DisplayName("a pool that cannot reach the database fails the transaction as unreachable")

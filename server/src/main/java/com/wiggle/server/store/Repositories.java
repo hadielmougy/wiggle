@@ -38,9 +38,9 @@ public final class Repositories {
     public static GraphStore graph() { return GRAPH; }
     public static TaskLocks locks() { return LOCKS; }
 
-    /** Whether the open write transaction rolls its writes back on a throw ({@link Tx#transactional()}). */
-    public static boolean transactional() {
-        return CurrentTx.requireWrite().transactional();
+    /** Holds the open write transaction's token and instance writes back until it commits ({@link Tx#bufferWrites()}). */
+    public static void bufferWrites() {
+        CurrentTx.requireWrite().bufferWrites();
     }
 
     /** {@code type}, delegating each call to the transaction open on the calling thread. */

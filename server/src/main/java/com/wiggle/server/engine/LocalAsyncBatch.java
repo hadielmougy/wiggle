@@ -7,9 +7,6 @@ import com.wiggle.server.engine.WorkflowEngine.RunResult;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.server.store.BufferedTx;
-import com.wiggle.server.store.CurrentTx;
-import com.wiggle.server.store.Tx;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -80,16 +77,11 @@ final class LocalAsyncBatch {
                 survivors.add(run);
             }
         }
-        Tx current = CurrentTx.requireWrite();
-        Tx applyTx = current.transactional() ? BufferedTx.of(current) : current;
-        CurrentTx.rebind(applyTx, () -> {
-            for (Run run : survivors) {
-                results.put(run.startTaskId(), RunResult.of(
-                        chain.apply(tasks.get(run.startTaskId()), run, CHAINS_BACK)));
-            }
-            return null;
-        });
-        if (applyTx instanceof BufferedTx buffered) buffered.flush();
+        Repositories.bufferWrites();
+        for (Run run : survivors) {
+            results.put(run.startTaskId(), RunResult.of(
+                    chain.apply(tasks.get(run.startTaskId()), run, CHAINS_BACK)));
+        }
         return results;
     }
 

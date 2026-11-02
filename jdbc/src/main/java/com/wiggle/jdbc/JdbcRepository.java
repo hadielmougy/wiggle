@@ -5,7 +5,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 
 /**
  * A repository over one {@link JdbcStorage}. Its statements run on the connection of the transaction
- * open on that store on the calling thread, and refuse to run without one.
+ * open on that store on the calling thread, and refuse to run without one. Each runs after the
+ * writes that transaction holds back ({@link JdbcStorage#bufferWrites}).
  */
 abstract class JdbcRepository {
 
@@ -17,15 +18,17 @@ abstract class JdbcRepository {
         this.dialect = owner.dialect();
     }
 
-    /** Statements with {@code :name} parameters, in the current transaction. */
+    /** Statements with {@code :name} parameters, in the current transaction, after the writes it holds back. */
     final NamedParameterJdbcTemplate jdbc() {
         owner.requireTransaction();
+        owner.flushPending();
         return owner.named();
     }
 
-    /** Statements with positional {@code ?} parameters, in the current transaction. */
+    /** Statements with positional {@code ?} parameters, in the current transaction, after the writes it holds back. */
     final JdbcTemplate positional() {
         owner.requireTransaction();
+        owner.flushPending();
         return owner.named().getJdbcTemplate();
     }
 

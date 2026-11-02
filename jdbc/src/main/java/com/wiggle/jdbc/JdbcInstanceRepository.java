@@ -4,6 +4,7 @@ import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.InstanceRepository;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.server.store.WriteBuffer;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
 import java.util.ArrayList;
@@ -75,6 +76,11 @@ final class JdbcInstanceRepository extends JdbcRepository implements InstanceRep
     }
 
     @Override public void updateInstance(Instance i) {
+        WriteBuffer held = owner.buffer();
+        if (held != null) {
+            held.updateInstance(i);
+            return;
+        }
         jdbc().update(UPDATE_INSTANCE, instanceUpdate(i));
         i.revision++;
     }

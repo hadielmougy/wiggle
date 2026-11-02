@@ -31,16 +31,6 @@ public final class CurrentTx {
         }
     }
 
-    /**
-     * Runs {@code body} with {@code replacement} bound in place of the current transaction, on the same
-     * shard: how a write buffer stands in for the transaction it buffers.
-     */
-    public static <R> R rebind(Tx replacement, Supplier<R> body) {
-        Scope scope = CURRENT.get();
-        if (scope == null || !scope.write()) throw new IllegalStateException("no write transaction is open on this thread");
-        return bind(replacement, scope.shard(), true, body);
-    }
-
     /** The calling thread's transaction; refused when none is open. */
     public static ReadTx require() {
         Scope scope = CURRENT.get();

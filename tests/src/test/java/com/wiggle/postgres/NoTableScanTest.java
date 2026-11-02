@@ -151,7 +151,7 @@ class NoTableScanTest {
         }
         Set<String> missed = new TreeSet<>();
         for (Method m : Tx.class.getMethods()) {
-            if (!Modifier.isStatic(m.getModifiers()) && !m.getName().equals("transactional")
+            if (!Modifier.isStatic(m.getModifiers()) && !m.getName().equals("bufferWrites")
                     && !called.contains(signature(m))) {
                 missed.add(signature(m));
             }
