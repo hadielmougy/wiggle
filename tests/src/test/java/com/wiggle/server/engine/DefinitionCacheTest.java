@@ -4,7 +4,9 @@ import com.wiggle.core.Node;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.GraphStore;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Storage;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -148,7 +150,7 @@ class DefinitionCacheTest {
             storage.migrate();
             new DefinitionRegistry(storage).register(def("orders", 1, "a"));
             DefinitionRegistry other = new DefinitionRegistry(storage);
-            assertEquals("a", storage.inTx(tx -> other.graph(tx, "orders", 1).node("step").activity()));
+            assertEquals("a", TestTx.inHome(storage, () -> other.graph(Repositories.graph(), "orders", 1).node("step").activity()));
             assertEquals("a", other.graph(REFUSES, "orders", 1).node("step").activity(),
                     "from then on it reads nothing from the store for this graph");
             assertThrows(StoreTouched.class, () -> other.graph(REFUSES, "unknown", 1).node("step"),
@@ -164,7 +166,7 @@ class DefinitionCacheTest {
             DefinitionRegistry registry = new DefinitionRegistry(storage);
             registry.register(chain("big", 1, 200));
             DefinitionRegistry other = new DefinitionRegistry(storage);
-            assertEquals("act-1", storage.inTx(tx -> other.graph(tx, "big", 1).node("n1").activity()),
+            assertEquals("act-1", TestTx.inHome(storage, () -> other.graph(Repositories.graph(), "big", 1).node("n1").activity()),
                     "a node that did not register it counts its nodes, and stays on the lazy path");
             assertThrows(StoreTouched.class, () -> other.graph(REFUSES, "big", 1).node("n0"),
                     "having counted once, it does not count again, and never holds the graph whole");
@@ -173,7 +175,7 @@ class DefinitionCacheTest {
             assertThrows(StoreTouched.class, () -> uncached.node("n0"),
                     "a large graph must not be materialised whole just to advance one token");
 
-            assertEquals("act-0", storage.inTx(tx -> registry.graph(tx, "big", 1).node("n0").activity()),
+            assertEquals("act-0", TestTx.inHome(storage, () -> registry.graph(Repositories.graph(), "big", 1).node("n0").activity()),
                     "and it must still resolve correctly against a real store");
         }
     }

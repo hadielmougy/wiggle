@@ -4,6 +4,7 @@ import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.store.ReplicatedStorage.Fallback;
 import com.wiggle.server.store.ReplicatedStorage.Named;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -40,23 +41,23 @@ class ReplicatedStorageTest {
     }
 
     private static <S extends Storage> S marked(S s, String marker, Long beatAt) {
-        s.inTx(tx -> {
+        TestTx.inHome(s, () -> {
             Rows.Instance i = new Rows.Instance();
             i.id = "marker";
             i.workflow = marker;
             i.version = 1;
             i.status = com.wiggle.core.InstanceStatus.RUNNING;
             i.context = com.wiggle.core.Doc.EMPTY;
-            tx.insertInstance(i);
-            tx.claimShardIdentity(0);
-            if (beatAt != null) tx.writeShardBeat(beatAt);
+            Repositories.instances().insertInstance(i);
+            Repositories.shards().claimShardIdentity(0);
+            if (beatAt != null) Repositories.shards().writeShardBeat(beatAt);
             return null;
         });
         return s;
     }
 
     private static String servedBy(Storage s, Freshness f) {
-        return s.readShard(0, f, tx -> tx.findInstance("marker").map(i -> i.workflow).orElseThrow());
+        return new ShardTransactions(s).read(0, f, () -> Repositories.instances().findInstance("marker").map(i -> i.workflow).orElseThrow());
     }
 
     private static ReplicatedStorage store(Fallback fallback, Storage primary, Storage... replicas) {
@@ -72,8 +73,8 @@ class ReplicatedStorageTest {
         s.probeReplicas(NOW);
         assertEquals("replica", servedBy(s, Freshness.REPLICA_OK));
         assertEquals("primary", servedBy(s, Freshness.PRIMARY));
-        assertEquals("primary", s.inTx(tx -> tx.findInstance("marker").orElseThrow().workflow));
-        assertEquals("primary", s.inShard(0, tx -> tx.findInstance("marker").orElseThrow().workflow));
+        assertEquals("primary", TestTx.inHome(s, () -> Repositories.instances().findInstance("marker").orElseThrow().workflow));
+        assertEquals("primary", new ShardTransactions(s).inShard(0, () -> Repositories.instances().findInstance("marker").orElseThrow().workflow));
         assertEquals(List.of(new ReplicatedStorage.ReplicaStatus("#1", true, 100, null)), s.replicaStatus());
     }
 
@@ -127,7 +128,7 @@ class ReplicatedStorageTest {
         assertFalse(s.replicaStatus().getFirst().healthy());
 
         replica.broken = false;
-        replica.mem.inTx(tx -> { tx.writeShardBeat(NOW + 500); return null; });
+        TestTx.inHome(replica.mem, () -> Repositories.shards().writeShardBeat(NOW + 500));
         s.probeReplicas(NOW + 500);
         assertFalse(s.replicaStatus().getFirst().healthy(), "inside the backoff it is not probed");
         s.probeReplicas(NOW + ReplicatedStorage.MIN_BACKOFF_MILLIS + 1);
@@ -141,8 +142,8 @@ class ReplicatedStorageTest {
         ReplicatedStorage s = store(Fallback.PRIMARY, primary, PostgresStorageFactory.inMemory());
         s.migrate();
         s.beatPrimaries(NOW);
-        assertEquals(Optional.of(NOW), primary.inTx(tx -> tx.shardBeat().isPresent()
-                ? Optional.of(tx.shardBeat().getAsLong()) : Optional.empty()));
+        assertEquals(Optional.of(NOW), TestTx.inHome(primary, () -> Repositories.shards().shardBeat().isPresent()
+                ? Optional.of(Repositories.shards().shardBeat().getAsLong()) : Optional.empty()));
         assertTrue(s.hasReplicas());
     }
 }

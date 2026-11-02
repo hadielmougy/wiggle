@@ -5,7 +5,9 @@ import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -68,7 +70,7 @@ class PostgresRegistrationTest {
             assertTrue(e.getMessage().contains("already registered with a different graph"), e.getMessage());
 
             // refused means refused: the stored graph is still the one-step topology
-            storage.inTxVoid(tx -> assertTrue(tx.graphNode(name, 1, "n2").isEmpty(),
+            TestTx.inHome(storage, () -> assertTrue(Repositories.graph().graphNode(name, 1, "n2").isEmpty(),
                     "the second step must not have been written"));
         }
     }
@@ -80,20 +82,20 @@ class PostgresRegistrationTest {
             String name = unique();
 
             registry.register(spec(name, 1, true));    // two steps
-            storage.inTxVoid(tx -> assertTrue(tx.graphNode(name, 1, "n2").isPresent()));
+            TestTx.inHome(storage, () -> assertTrue(Repositories.graph().graphNode(name, 1, "n2").isPresent()));
 
             registry.register(spec(name, 1, false), true);   // forced down to one step
 
             // DELETE then re-INSERT: the dropped step's row is gone, not orphaned
-            storage.inTxVoid(tx -> {
-                assertTrue(tx.graphNode(name, 1, "n1").isPresent(), "the surviving step");
-                assertTrue(tx.graphNode(name, 1, "n2").isEmpty(), "the removed step's row was deleted");
+            TestTx.inHome(storage, () -> {
+                assertTrue(Repositories.graph().graphNode(name, 1, "n1").isPresent(), "the surviving step");
+                assertTrue(Repositories.graph().graphNode(name, 1, "n2").isEmpty(), "the removed step's row was deleted");
             });
 
             // and the blob was overwritten in place, not duplicated
-            storage.inTxVoid(tx -> assertEquals(
+            TestTx.inHome(storage, () -> assertEquals(
                     spec(name, 1, false).fingerprint(),
-                    tx.definitionFingerprint(name, 1).orElseThrow().value()));
+                    Repositories.graph().definitionFingerprint(name, 1).orElseThrow().value()));
         }
     }
 
@@ -107,8 +109,8 @@ class PostgresRegistrationTest {
             registry.register(spec(name, 1, false));
             registry.register(spec(name, 2, false));
 
-            storage.inTxVoid(tx -> assertEquals(3, tx.latestVersion(name).orElseThrow()));
-            storage.inTxVoid(tx -> assertTrue(tx.latestVersion(unique()).isEmpty(),
+            TestTx.inHome(storage, () -> assertEquals(3, Repositories.graph().latestVersion(name).orElseThrow()));
+            TestTx.inHome(storage, () -> assertTrue(Repositories.graph().latestVersion(unique()).isEmpty(),
                     "an unknown name has no latest -- MAX() over no rows is not version 0"));
         }
     }
@@ -121,8 +123,8 @@ class PostgresRegistrationTest {
             WorkflowDefinition one = spec(name, 1, false);
             registry.register(one);
 
-            storage.inTxVoid(tx -> {
-                var stored = tx.definitionFingerprint(name, 1).orElseThrow();
+            TestTx.inHome(storage, () -> {
+                var stored = Repositories.graph().definitionFingerprint(name, 1).orElseThrow();
                 assertEquals(one.fingerprint(), stored.value());
                 assertEquals(WorkflowDefinition.FINGERPRINT_ALGO, stored.algo());
             });

@@ -2,6 +2,7 @@ package com.wiggle.server.store;
 
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.server.store.Rows.Instance;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -27,13 +28,13 @@ class InstanceStatusWidthTest {
         withJdbc(storage -> {
             for (InstanceStatus s : InstanceStatus.values()) {
                 String id = "wfi_rt_" + s.name();
-                storage.inTxVoid(tx -> tx.insertInstance(instance(id, InstanceStatus.RUNNING)));
-                storage.inTxVoid(tx -> {
-                    Instance i = tx.lockInstance(id).orElseThrow();
+                TestTx.inHome(storage, () -> Repositories.instances().insertInstance(instance(id, InstanceStatus.RUNNING)));
+                TestTx.inHome(storage, () -> {
+                    Instance i = Repositories.instances().lockInstance(id).orElseThrow();
                     i.status = s;
-                    tx.updateInstance(i);
+                    Repositories.instances().updateInstance(i);
                 });
-                InstanceStatus back = storage.inTx(tx -> tx.findInstance(id).orElseThrow().status);
+                InstanceStatus back = TestTx.inHome(storage, () -> Repositories.instances().findInstance(id).orElseThrow().status);
                 assertEquals(s, back, s + " did not survive the round trip");
             }
         });
@@ -44,11 +45,11 @@ class InstanceStatusWidthTest {
     void jdbcPurgeAgreesWithTheEnum() throws Exception {
         withJdbc(storage -> {
             for (InstanceStatus s : InstanceStatus.values()) {
-                storage.inTxVoid(tx -> tx.insertInstance(instance("wfi_" + s.name(), s)));
+                TestTx.inHome(storage, () -> Repositories.instances().insertInstance(instance("wfi_" + s.name(), s)));
             }
-            storage.inTxVoid(tx -> tx.deleteTerminalInstancesBefore(1_000, 100));
+            TestTx.inHome(storage, () -> Repositories.instances().deleteTerminalInstancesBefore(1_000, 100));
             Set<String> survived = Arrays.stream(InstanceStatus.values())
-                    .filter(s -> storage.inTx(tx -> tx.findInstance("wfi_" + s.name()).isPresent()))
+                    .filter(s -> TestTx.inHome(storage, () -> Repositories.instances().findInstance("wfi_" + s.name()).isPresent()))
                     .map(Enum::name).collect(Collectors.toSet());
             Set<String> expected = Arrays.stream(InstanceStatus.values())
                     .filter(InstanceStatus::live).map(Enum::name).collect(Collectors.toSet());

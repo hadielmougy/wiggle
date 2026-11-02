@@ -1,6 +1,7 @@
 package com.wiggle.server.engine;
 
 import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.tests.Reports;
 import com.wiggle.tests.Modes;
 
@@ -20,6 +21,7 @@ import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.Tx;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -526,8 +528,8 @@ class AdvanceManyTest {
 
             var held = new java.util.concurrent.CountDownLatch(1);
             var release = new java.util.concurrent.CountDownLatch(1);
-            Thread holder = new Thread(() -> storage.inTx(tx -> {
-                assertEquals(1, tx.lockInstances(List.of(id)).size());
+            Thread holder = new Thread(() -> TestTx.inHome(storage, () -> {
+                assertEquals(1, Repositories.instances().lockInstances(List.of(id)).size());
                 held.countDown();
                 try {
                     release.await();
@@ -540,7 +542,7 @@ class AdvanceManyTest {
             assertTrue(held.await(5, java.util.concurrent.TimeUnit.SECONDS));
             try {
                 assertThrows(RuntimeException.class,
-                        () -> storage.inTx(tx -> tx.lockInstance(id)),
+                        () -> TestTx.inHome(storage, () -> Repositories.instances().lockInstance(id)),
                         "the row must be locked; a clean read-through means FOR UPDATE is gone");
             } finally {
                 release.countDown();

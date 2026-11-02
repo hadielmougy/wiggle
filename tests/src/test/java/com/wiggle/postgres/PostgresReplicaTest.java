@@ -5,11 +5,14 @@ import com.wiggle.core.InstanceStatus;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.store.Freshness;
 import com.wiggle.server.store.ReplicatedStorage;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
+import com.wiggle.server.store.ShardTransactions;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.topology.Topology;
 import com.wiggle.server.topology.TopologyParser;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -89,15 +92,15 @@ class PostgresReplicaTest {
             onStandby("SELECT pg_wal_replay_pause()");
             try {
                 String id = "wfi.s0.replica-" + System.nanoTime();
-                storage.inTxFor(id, tx -> { tx.insertInstance(instance(id)); return null; });
-                assertTrue(storage.readFor(id, Freshness.PRIMARY, tx -> tx.findInstance(id)).isPresent());
-                assertTrue(storage.readFor(id, Freshness.REPLICA_OK, tx -> tx.findInstance(id)).isEmpty(),
+                new ShardTransactions(storage).forInstance(id, () -> { Repositories.instances().insertInstance(instance(id)); return null; });
+                assertTrue(new ShardTransactions(storage).readFor(id, Freshness.PRIMARY, () -> Repositories.instances().findInstance(id)).isPresent());
+                assertTrue(new ShardTransactions(storage).readFor(id, Freshness.REPLICA_OK, () -> Repositories.instances().findInstance(id)).isEmpty(),
                         "the replica-allowed read went to the paused standby");
 
                 Thread.sleep(1_200);
                 tick(storage);
                 assertFalse(shard.replicaStatus().getFirst().healthy(), shard.replicaStatus().toString());
-                assertTrue(storage.readFor(id, Freshness.REPLICA_OK, tx -> tx.findInstance(id)).isPresent(),
+                assertTrue(new ShardTransactions(storage).readFor(id, Freshness.REPLICA_OK, () -> Repositories.instances().findInstance(id)).isPresent(),
                         "once the standby is over its lag bound, the primary serves");
             } finally {
                 onStandby("SELECT pg_wal_replay_resume()");
@@ -110,8 +113,8 @@ class PostgresReplicaTest {
 
         try (JdbcStorage replica = JdbcStorage.readReplica(REPLICA, TestDb.user("PG"), TestDb.password("PG"), 1,
                 new PostgresDialect())) {
-            RuntimeException refused = assertThrows(RuntimeException.class, () -> replica.inTx(tx -> {
-                tx.writeShardBeat(System.currentTimeMillis());
+            RuntimeException refused = assertThrows(RuntimeException.class, () -> TestTx.inHome(replica, () -> {
+                Repositories.shards().writeShardBeat(System.currentTimeMillis());
                 return null;
             }), "a replica connection cannot write");
             assertTrue(String.valueOf(refused.getMessage()).contains("read-only"), refused.getMessage());

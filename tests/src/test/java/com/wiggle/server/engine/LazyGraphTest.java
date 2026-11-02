@@ -3,7 +3,9 @@ package com.wiggle.server.engine;
 import com.wiggle.core.Node;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Storage;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -40,8 +42,8 @@ class LazyGraphTest {
         try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             new DefinitionRegistry(storage).register(def);
-            storage.inTxVoid(tx -> {
-                LazyGraph graph = new DefaultLazyGraph(tx, def.name(), def.version());
+            TestTx.inHome(storage, () -> {
+                LazyGraph graph = new DefaultLazyGraph(Repositories.graph(), def.name(), def.version());
                 assertEquals("n0", graph.startNode());
                 // Walk the whole chain: past node 64 the earliest entries get evicted.
                 for (int i = 0; i < NODES; i++) {
@@ -61,11 +63,11 @@ class LazyGraphTest {
         try (Storage storage = PostgresStorageFactory.inMemory()) {
             storage.migrate();
             new DefinitionRegistry(storage).register(def);
-            storage.inTxVoid(tx -> {
-                LazyGraph graph = new DefaultLazyGraph(tx, def.name(), def.version());
+            TestTx.inHome(storage, () -> {
+                LazyGraph graph = new DefaultLazyGraph(Repositories.graph(), def.name(), def.version());
                 assertThrows(IllegalStateException.class, () -> graph.node("nope"));
 
-                LazyGraph missing = new DefaultLazyGraph(tx, "no-such-workflow", 1);
+                LazyGraph missing = new DefaultLazyGraph(Repositories.graph(), "no-such-workflow", 1);
                 assertThrows(IllegalArgumentException.class, missing::startNode);
             });
         }

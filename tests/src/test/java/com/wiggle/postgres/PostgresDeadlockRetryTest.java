@@ -2,8 +2,10 @@ package com.wiggle.postgres;
 
 import com.wiggle.core.InstanceStatus;
 import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -70,27 +72,27 @@ class PostgresDeadlockRetryTest {
         CountDownLatch tookB = new CountDownLatch(1);
 
         try (JdbcStorage storage = storage()) {
-            storage.inTxVoid(tx -> {
-                tx.insertInstance(instance(a));
-                tx.insertInstance(instance(b));
+            TestTx.inHome(storage, () -> {
+                Repositories.instances().insertInstance(instance(a));
+                Repositories.instances().insertInstance(instance(b));
             });
 
             ExecutorService pool = Executors.newFixedThreadPool(2);
             try {
-                Future<String> first = pool.submit(() -> storage.inTx(tx -> {
+                Future<String> first = pool.submit(() -> TestTx.inHome(storage, () -> {
                     bodies.incrementAndGet();
-                    tx.lockInstance(a);
+                    Repositories.instances().lockInstance(a);
                     tookA.countDown();
                     await(tookB);
-                    tx.lockInstance(b);
+                    Repositories.instances().lockInstance(b);
                     return "a-then-b";
                 }));
-                Future<String> second = pool.submit(() -> storage.inTx(tx -> {
+                Future<String> second = pool.submit(() -> TestTx.inHome(storage, () -> {
                     bodies.incrementAndGet();
-                    tx.lockInstance(b);
+                    Repositories.instances().lockInstance(b);
                     tookB.countDown();
                     await(tookA);
-                    tx.lockInstance(a);
+                    Repositories.instances().lockInstance(a);
                     return "b-then-a";
                 }));
 
@@ -102,7 +104,7 @@ class PostgresDeadlockRetryTest {
                 pool.shutdownNow();
             }
 
-            List<Rows.Instance> locked = storage.inTx(tx -> tx.lockInstances(List.of(a, b).stream().sorted().toList()));
+            List<Rows.Instance> locked = TestTx.inHome(storage, () -> Repositories.instances().lockInstances(List.of(a, b).stream().sorted().toList()));
             assertEquals(2, locked.size(), "both rows survived the deadlock and its replay");
         }
     }

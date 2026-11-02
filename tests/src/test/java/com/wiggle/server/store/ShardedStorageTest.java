@@ -8,6 +8,7 @@ import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -78,10 +79,10 @@ class ShardedStorageTest {
     void routes() {
         Probe seven = new Probe("a"), two = new Probe("b");
         ShardedStorage s = new ShardedStorage(shards(seven, two), 2);
-        s.inTxFor("wfi.s7.01k6abc", tx -> null);
-        s.readFor("tok.s7.01k6abc", Freshness.REPLICA_OK, tx -> null);
-        s.inHome(tx -> null);
-        s.inTxFor("wfi_01k6abc", tx -> null);   // carries no shard: home
+        new ShardTransactions(s).forInstance("wfi.s7.01k6abc", () -> null);
+        new ShardTransactions(s).readFor("tok.s7.01k6abc", Freshness.REPLICA_OK, () -> null);
+        new ShardTransactions(s).inHome( () -> null);
+        new ShardTransactions(s).forInstance("wfi_01k6abc", () -> null);   // carries no shard: home
         assertEquals(2, seven.txs.get());
         assertEquals(2, two.txs.get());
         assertEquals(List.of(7, 2), s.instanceShards(), "fan-out visits shards in configured order");
@@ -93,7 +94,7 @@ class ShardedStorageTest {
         Probe seven = new Probe("a"), two = new Probe("b");
         ShardedStorage s = new ShardedStorage(List.of(new ShardedStorage.Member(7, ShardState.ACTIVE, false, seven),
                 new ShardedStorage.Member(2, ShardState.ACTIVE, true, two)), 2, 7);
-        s.inAuth(tx -> null);
+        new ShardTransactions(s).inAuth( () -> null);
         assertEquals(1, seven.txs.get());
         assertEquals(0, two.txs.get());
         assertEquals(7, s.auth());
@@ -113,7 +114,7 @@ class ShardedStorageTest {
     @Test @DisplayName("a shard this node does not know is a transient failure, never 'not found'")
     void unknownShardIsTransient() {
         ShardedStorage s = new ShardedStorage(shards(new Probe("a"), new Probe("b")), 2);
-        StorageException e = assertThrows(StorageException.class, () -> s.inTxFor("wfi.s9.01k6abc", tx -> null));
+        StorageException e = assertThrows(StorageException.class, () -> new ShardTransactions(s).forInstance("wfi.s9.01k6abc", () -> null));
         assertSame(StorageException.Classification.TRANSIENT, e.classification());
     }
 
@@ -149,8 +150,8 @@ class ShardedStorageTest {
     void identityIsClaimedAndChecked() {
         JdbcStorage a = PostgresStorageFactory.inMemory(), b = PostgresStorageFactory.inMemory();
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, a), member(1, ShardState.ACTIVE, b)), 0).migrate();
-        assertEquals(0, a.inTx(tx -> tx.shardIdentity()).orElseThrow());
-        assertEquals(1, b.inTx(tx -> tx.shardIdentity()).orElseThrow());
+        assertEquals(0, TestTx.inHome(a, () -> Repositories.shards().shardIdentity()).orElseThrow());
+        assertEquals(1, TestTx.inHome(b, () -> Repositories.shards().shardIdentity()).orElseThrow());
 
         ShardedStorage swapped = new ShardedStorage(
                 List.of(member(0, ShardState.ACTIVE, b), member(1, ShardState.ACTIVE, a)), 0);
@@ -162,10 +163,10 @@ class ShardedStorageTest {
     void registryMovesForward() {
         JdbcStorage home = PostgresStorageFactory.inMemory(), one = PostgresStorageFactory.inMemory();
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate();
-        assertEquals(List.of(0, 1), home.inTx(tx -> tx.shardRegistry()).stream().map(Rows.ShardRecord::shardId).toList());
+        assertEquals(List.of(0, 1), TestTx.inHome(home, () -> Repositories.shards().shardRegistry()).stream().map(Rows.ShardRecord::shardId).toList());
 
         new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.DRAINING, one)), 0).migrate();
-        assertEquals(ShardState.DRAINING, home.inTx(tx -> tx.shardRegistry()).get(1).state());
+        assertEquals(ShardState.DRAINING, TestTx.inHome(home, () -> Repositories.shards().shardRegistry()).get(1).state());
 
         IllegalStateException back = assertThrows(IllegalStateException.class, () -> new ShardedStorage(
                 List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.ACTIVE, one)), 0).migrate());
@@ -191,26 +192,26 @@ class ShardedStorageTest {
         live.version = 1;
         live.status = com.wiggle.core.InstanceStatus.RUNNING;
         live.context = com.wiggle.core.Doc.EMPTY;
-        one.inTxVoid(tx -> tx.insertInstance(live));
+        TestTx.inHome(one, () -> Repositories.instances().insertInstance(live));
 
         IllegalStateException busy = assertThrows(IllegalStateException.class, () -> new ShardedStorage(
                 List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.RETIRED, one)), 0).migrate());
         assertTrue(busy.getMessage().contains("live instance"), busy.getMessage());
 
-        one.inTxVoid(tx -> {
-            Rows.Instance done = tx.findInstance(live.id).orElseThrow();
+        TestTx.inHome(one, () -> {
+            Rows.Instance done = Repositories.instances().findInstance(live.id).orElseThrow();
             done.status = com.wiggle.core.InstanceStatus.COMPLETED;
-            tx.updateInstance(done);
+            Repositories.instances().updateInstance(done);
         });
         ShardedStorage s = new ShardedStorage(
                 List.of(member(0, ShardState.ACTIVE, home), member(1, ShardState.RETIRED, one)), 0);
         s.migrate();
         assertEquals(List.of(0), s.instanceShards(), "a retired shard is neither swept nor claimed from");
-        assertThrows(ShardRetiredException.class, () -> s.inTxFor("wfi.s1.live", tx -> null));
+        assertThrows(ShardRetiredException.class, () -> new ShardTransactions(s).forInstance("wfi.s1.live", () -> null));
 
         ShardedStorage dropped = new ShardedStorage(List.of(member(0, ShardState.ACTIVE, home)), 0);
         dropped.migrate();   // once retired, a shard may leave the topology
-        assertThrows(ShardRetiredException.class, () -> dropped.inTxFor("wfi.s1.live", tx -> null),
+        assertThrows(ShardRetiredException.class, () -> new ShardTransactions(dropped).forInstance("wfi.s1.live", () -> null),
                 "and its ids are still not found, rather than unknown");
     }
 
@@ -242,19 +243,19 @@ class ShardedStorageTest {
         after.migrate();
 
         for (WorkflowDefinition def : List.of(v1, v2)) {
-            added.inTx(tx -> {
-                assertTrue(tx.definition(def.name(), def.version()).isPresent(), def.key() + " copied");
-                assertEquals(def.fingerprint(), tx.definitionFingerprint(def.name(), def.version()).orElseThrow().value(),
+            TestTx.inHome(added, () -> {
+                assertTrue(Repositories.graph().definition(def.name(), def.version()).isPresent(), def.key() + " copied");
+                assertEquals(def.fingerprint(), Repositories.graph().definitionFingerprint(def.name(), def.version()).orElseThrow().value(),
                         def.key() + " keeps its fingerprint, so a re-registration is a no-op, not a conflict");
-                assertEquals(def.numberOfNodes(), tx.graphNodeCount(def.name(), def.version()), def.key() + " graph rows");
+                assertEquals(def.numberOfNodes(), Repositories.graph().graphNodeCount(def.name(), def.version()), def.key() + " graph rows");
                 return null;
             });
         }
-        assertEquals(List.of(1, 2), added.inTx(tx -> tx.definitionVersions("grow")));
+        assertEquals(List.of(1, 2), TestTx.inHome(added, () -> Repositories.graph().definitionVersions("grow")));
 
         after.migrate();
         new DefinitionRegistry(after).register(v1);
-        assertFalse(added.inTx(tx -> tx.definitionVersions("grow")).isEmpty(), "a second migrate and a re-registration change nothing");
+        assertFalse(TestTx.inHome(added, () -> Repositories.graph().definitionVersions("grow")).isEmpty(), "a second migrate and a re-registration change nothing");
     }
 
     @Test @DisplayName("a shard found unreachable fails its routes at once until a probe reaches it again")
@@ -264,26 +265,26 @@ class ShardedStorageTest {
         ShardedStorage s = new ShardedStorage(shards(seven, two), 2);
         seven.unreachable = true;
 
-        assertThrows(StorageUnreachableException.class, () -> s.inShard(7, tx -> null));
+        assertThrows(StorageUnreachableException.class, () -> new ShardTransactions(s).inShard(7, () -> null));
         assertTrue(s.isDown(7));
         assertEquals(1, seven.txs.get());
 
         StorageException refused = assertThrows(StorageUnreachableException.class,
-                () -> s.readFor("wfi.s7.01k6abc", Freshness.PRIMARY, tx -> null));
+                () -> new ShardTransactions(s).readFor("wfi.s7.01k6abc", Freshness.PRIMARY, () -> null));
         assertTrue(refused.repeatable(), "refused as transient, so a client sees UNAVAILABLE");
         await(() -> seven.txs.get() == 2, "the background probe has tried shard 7");
         await(() -> !isProbing(s), "the probe has backed off");
-        assertThrows(StorageUnreachableException.class, () -> s.inShard(7, tx -> null));
+        assertThrows(StorageUnreachableException.class, () -> new ShardTransactions(s).inShard(7, () -> null));
         assertEquals(2, seven.txs.get(), "within the backoff, neither a route nor a probe reaches the shard");
 
-        s.inHome(tx -> null);
+        new ShardTransactions(s).inHome( () -> null);
         assertEquals(1, two.txs.get(), "the other shard is routed to as before");
 
         seven.unreachable = false;
         Thread.sleep(ShardedStorage.MIN_PROBE_BACKOFF_MILLIS);
-        assertThrows(StorageUnreachableException.class, () -> s.inShard(7, tx -> null));
+        assertThrows(StorageUnreachableException.class, () -> new ShardTransactions(s).inShard(7, () -> null));
         await(() -> !s.isDown(7), "a probe finds shard 7 reachable");
-        s.inShard(7, tx -> null);
+        new ShardTransactions(s).inShard(7, () -> null);
     }
 
     private static boolean isProbing(ShardedStorage s) {

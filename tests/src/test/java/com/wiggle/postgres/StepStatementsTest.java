@@ -6,9 +6,11 @@ import com.wiggle.core.TokenStatus;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows.LockedTask;
 import com.wiggle.tests.StepStatementSequences;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -74,21 +76,21 @@ class StepStatementsTest extends StepStatementSequences {
             CountDownLatch holding = new CountDownLatch(1);
             ExecutorService pool = Executors.newFixedThreadPool(2);
             try {
-                Future<?> first = pool.submit(() -> storage.inTxVoid(tx -> {
-                    LockedTask locked = tx.lockTask(taskId).orElseThrow();
+                Future<?> first = pool.submit(() -> TestTx.inHome(storage, () -> {
+                    LockedTask locked = Repositories.locks().lockTask(taskId).orElseThrow();
                     locked.token().status = TokenStatus.DONE;
-                    tx.updateToken(locked.token());
-                    tx.updateInstance(locked.inst());
+                    Repositories.tokens().updateToken(locked.token());
+                    Repositories.instances().updateInstance(locked.inst());
                     holding.countDown();
                     sleep(500);
                 }));
                 assertTrue(holding.await(10, TimeUnit.SECONDS));
-                Future<LockedTask> second = pool.submit(() -> storage.inTx(tx -> tx.lockTask(taskId).orElseThrow()));
+                Future<LockedTask> second = pool.submit(() -> TestTx.inHome(storage, () -> Repositories.locks().lockTask(taskId).orElseThrow()));
                 first.get(10, TimeUnit.SECONDS);
                 LockedTask seen = second.get(10, TimeUnit.SECONDS);
 
                 assertEquals(TokenStatus.DONE, seen.token().status, "the token as the first transaction committed it");
-                LockedTask now = storage.inTx(tx -> tx.lockTask(taskId).orElseThrow());
+                LockedTask now = TestTx.inHome(storage, () -> Repositories.locks().lockTask(taskId).orElseThrow());
                 assertEquals(now.inst().revision, seen.inst().revision, "the instance as committed too");
             } finally {
                 pool.shutdownNow();

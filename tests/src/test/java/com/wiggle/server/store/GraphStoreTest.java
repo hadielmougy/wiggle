@@ -7,6 +7,7 @@ import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefaultLazyGraph;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -51,16 +52,16 @@ class GraphStoreTest {
 
     /** Registers a definition the way the engine does: the blob plus the normalised graph rows. */
     private static void register(Storage storage, WorkflowDefinition d) {
-        storage.inTxVoid(tx -> {
-            tx.putDefinition(d.name(), d.version(), Json.write(d.toJson()),
+        TestTx.inHome(storage, () -> {
+            Repositories.graph().putDefinition(d.name(), d.version(), Json.write(d.toJson()),
                     d.fingerprint(), WorkflowDefinition.FINGERPRINT_ALGO);
-            tx.putGraph(d);
+            Repositories.graph().putGraph(d);
         });
     }
 
     /** Runs {@code body} against the store's {@link GraphStore} facet in one transaction. */
     private static void read(Storage storage, Consumer<GraphStore> body) {
-        storage.inTxVoid(tx -> body.accept(tx));   // Tx is-a GraphStore
+        TestTx.inHome(storage, () -> body.accept(Repositories.graph()));
     }
 
     @Test

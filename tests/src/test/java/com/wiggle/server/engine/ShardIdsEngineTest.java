@@ -4,8 +4,10 @@ import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Ids;
 import com.wiggle.core.ShardIds;
 import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Storage;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -53,7 +55,7 @@ class ShardIdsEngineTest {
     };
 
     private static String onlyChild(Storage storage, String parentId) {
-        List<String> children = storage.inTx(tx -> tx.childInstanceIds(parentId));
+        List<String> children = TestTx.inHome(storage, () -> Repositories.instances().childInstanceIds(parentId));
         assertEquals(1, children.size(), "the sub-flow node started one child");
         return children.get(0);
     }

@@ -2,12 +2,15 @@ package com.wiggle.server.search;
 
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.ShardState;
+import com.wiggle.server.store.ShardTransactions;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.Tx;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -38,7 +41,7 @@ class SearchIndexTest {
         @Override public void close() { }
 
         int docs() {
-            return mem.inTx(tx -> tx.searchDocsAfter("", 10_000)).size();
+            return TestTx.inHome(mem, () -> Repositories.search().searchDocsAfter("", 10_000)).size();
         }
     }
 
@@ -110,7 +113,7 @@ class SearchIndexTest {
         // A stale copy on a shard that no longer owns the instance: the newer one wins.
         String id = "wfi.s0.d1";
         int stray = index.winner(id) == 1 ? 2 : 1;
-        storage.inShard(stray, tx -> tx.upsertSearchDoc(doc(id, "apple", 1)));
+        new ShardTransactions(storage).inShard(stray, () -> Repositories.search().upsertSearchDoc(doc(id, "apple", 1)));
         List<Rows.SearchHit> all = index.search(query("apple"), false).hits();
         assertEquals(30, all.size(), "one hit per instance");
         assertEquals(101, all.stream().filter(h -> h.doc().instanceId().equals(id)).findFirst().orElseThrow().doc().updatedAt());

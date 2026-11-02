@@ -5,6 +5,7 @@ import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Storage;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
@@ -34,7 +35,7 @@ class StorageFactoryTest {
     void inMemory() {
         try (Storage s = new WiggleStorageFactory().create(config(null))) {
             assertInstanceOf(JdbcStorage.class, s);
-            assertEquals(0, (int) s.inTx(tx -> tx.countInstances(InstanceStatus.RUNNING)), "migrated and empty");
+            assertEquals(0, (int) TestTx.inHome(s, () -> Repositories.instances().countInstances(InstanceStatus.RUNNING)), "migrated and empty");
         }
     }
 

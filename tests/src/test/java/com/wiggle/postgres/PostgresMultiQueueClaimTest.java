@@ -5,8 +5,10 @@ import com.wiggle.core.NodeKind;
 import com.wiggle.core.TokenStatus;
 import com.wiggle.core.WorkflowVersion;
 import com.wiggle.jdbc.JdbcStorage;
+import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -57,7 +59,7 @@ class PostgresMultiQueueClaimTest {
 
     private static List<Token> claim(JdbcStorage storage, String worker, Set<String> queues,
                                      Set<WorkflowVersion> versions, int max) {
-        return storage.inTx(tx -> tx.claimTasks(worker, queues, versions, max, NOW, LEASE));
+        return TestTx.inHome(storage, () -> Repositories.tokens().claimTasks(worker, queues, versions, max, NOW, LEASE));
     }
 
     private static List<Long> times(List<Token> tokens) {
@@ -70,7 +72,7 @@ class PostgresMultiQueueClaimTest {
         try (JdbcStorage storage = storage()) {
             List<Token> rows = List.of(ready(q1, "w", 1, 10), ready(q1, "w", 1, 40), ready(q1, "w", 1, 50),
                     ready(q2, "w", 1, 20), ready(q2, "w", 1, 30));
-            storage.inTxVoid(tx -> tx.insertTokens(rows));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertTokens(rows));
 
             List<Token> first = claim(storage, "w1", Set.of(q1, q2), null, 3);
             assertEquals(List.of(10L, 20L, 30L), times(first), "the three earliest, from both queues");
@@ -94,7 +96,7 @@ class PostgresMultiQueueClaimTest {
             Token join = ready(q2, "w", 2, 14);
             join.kind = NodeKind.JOIN;
             Token alsoDue = ready(q2, "w", 2, 15);
-            storage.inTxVoid(tx -> tx.insertTokens(List.of(due, otherVersion, notDue, otherQueue, waiting, join, alsoDue)));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertTokens(List.of(due, otherVersion, notDue, otherQueue, waiting, join, alsoDue)));
 
             List<Token> claimed = claim(storage, "w1", Set.of(q1, q2), Set.of(new WorkflowVersion("w", 2)), 10);
             assertEquals(Set.of(due.id, alsoDue.id), Set.copyOf(claimed.stream().map(t -> t.id).toList()));
@@ -112,7 +114,7 @@ class PostgresMultiQueueClaimTest {
                 rows.add(ready(q2, "w", 1, 100 + i));
                 rows.add(ready(q3, "w", 1, 100 + i));
             }
-            storage.inTxVoid(tx -> tx.insertTokens(rows));
+            TestTx.inHome(storage, () -> Repositories.tokens().insertTokens(rows));
 
             CountDownLatch go = new CountDownLatch(1);
             ExecutorService pool = Executors.newFixedThreadPool(4);
