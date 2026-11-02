@@ -6,7 +6,10 @@ import com.wiggle.server.search.SearchIndex;
 import com.wiggle.server.search.SearchIndexer;
 import com.wiggle.server.store.ShardState;
 import com.wiggle.server.topology.Topology;
+import com.wiggle.server.api.ApiServlet;
 import com.wiggle.server.api.Authorizer;
+import com.wiggle.server.api.ControlPlaneApi;
+import com.wiggle.server.api.MemoryGuard;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.cluster.Housekeeper;
 import com.wiggle.server.cluster.ReplicaMonitor;
@@ -33,6 +36,8 @@ final class ServerBundle {
     private final WorkflowEngine engine;
     private final Housekeeper housekeeper;
     private final ReplicaMonitor replicaMonitor;
+    private final ApiServlet apiServlet;
+    /** The node's own API server; null when a servlet container serves {@link #apiServlet}. */
     private final HttpApi api;
     private final Search search;
     private final SearchIndexer indexer;
@@ -40,7 +45,7 @@ final class ServerBundle {
     /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
     private final HealthServer health;
 
-    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache)
+    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache, boolean servesApi)
             throws IOException {
         super();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
@@ -61,8 +66,11 @@ final class ServerBundle {
             this.indexer = null;
             this.upkeepMillis = 0;
         }
-        this.api = new HttpApi(engine, cluster, config.port(), config.maxLongPoll().toMillis(),
-                config.tls(), config.memory(), new Authorizer(config.auth().api(), authCache), search);
+        Authorizer authz = new Authorizer(config.auth().api(), authCache);
+        MemoryGuard memory = new MemoryGuard(config.memory());
+        this.apiServlet = new ApiServlet(new ControlPlaneApi(engine, cluster, config.maxLongPoll().toMillis(), memory,
+                authz, search), authz, memory);
+        this.api = servesApi ? new HttpApi(config.port(), config.tls(), apiServlet) : null;
         // The dashboard moved to the console; the former dashboard port now serves only /healthz.
         this.health = config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
     }
@@ -88,19 +96,22 @@ final class ServerBundle {
         if (indexer != null) indexer.start(250, upkeepMillis);
         housekeeper.start();
         replicaMonitor.start();
-        api.start();
+        if (api != null) api.start();
         if (health != null) health.start();
     }
 
     public void close() {
         if (health != null) health.close();
-        api.close();
+        if (api != null) api.close();
         if (indexer != null) indexer.close();
         housekeeper.close();
         replicaMonitor.close();
     }
 
-    public int port() { return api.port(); }
+    /** The port the node's own API server listens on; -1 when it has none. */
+    public int port() { return api == null ? -1 : api.port(); }
+
+    public ApiServlet apiServlet() { return apiServlet; }
 
 
     public WorkflowEngine engine() { return engine; }

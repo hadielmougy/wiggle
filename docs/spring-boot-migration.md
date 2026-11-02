@@ -34,9 +34,16 @@ still behaves the same.
    - 1e. `BufferedTx` becomes a buffer tied to the Spring transaction.
    - 1f. Moved to the start of phase 2: `@Transactional` needs the services to be Spring beans.
    - 1g. `InMemoryStorage`, `Storage.inTx*`, `Tx` and `ReadTx` are removed; tests move to H2.
-2. The `boot` module, starting with 1f (services on one fixed database move to `@Transactional`): configuration binding with the `WIGGLE_*` names kept, beans for the shard
-   `DataSource`s and transaction managers, the API and portal servlets on Boot's Tomcat (two ports),
-   Actuator in place of `HealthServer`, TLS, HTTP/2.
+2. The `boot` module (Spring Boot 4.1.2):
+   - 2a. A Boot application: settings read through Spring's `Environment` under the `WIGGLE_*` names,
+     the store and the node as beans, the API servlet on Boot's Tomcat with virtual threads.
+   - 2b. The portal on a second connector of the same Tomcat (`WIGGLE_PORTAL_PORT`), each port serving
+     only its own paths.
+   - 2c. Actuator on the probe port (`WIGGLE_DASHBOARD_PORT`) in place of `HealthServer`.
+   - 2d. TLS and mTLS on both connectors from the `WIGGLE_TLS_*` settings.
+   - 2e. HTTP/2 on the server side.
+   - 2f. (was 1f) Services on one fixed database move to `@Transactional`, over beans for the shard
+     `DataSource`s and transaction managers.
 3. Test support: `@WiggleBootTest`, a few named profiles, `WiggleTestNodes` for multi-node tests, and a
    two-class pilot that decides whether every test runs in a Spring context.
 4. Tests converted in batches.

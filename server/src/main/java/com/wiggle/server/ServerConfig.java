@@ -1,5 +1,6 @@
 package com.wiggle.server;
 
+import com.wiggle.core.Settings;
 import com.wiggle.core.Tls;
 import com.wiggle.server.topology.Topology;
 import com.wiggle.server.topology.TopologyParser;
@@ -41,15 +42,19 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         }
 
         public static Search fromEnvironment() {
+            return from(Settings.system());
+        }
+
+        public static Search from(Settings s) {
             java.util.Set<String> workflows = new java.util.LinkedHashSet<>();
-            for (String w : strProp("wiggle.search.workflows", "WIGGLE_SEARCH_WORKFLOWS", "").split(",")) {
+            for (String w : s.get("wiggle.search.workflows", "WIGGLE_SEARCH_WORKFLOWS", "").split(",")) {
                 if (!w.isBlank()) workflows.add(w.trim());
             }
-            return new Search(boolProp("wiggle.search.enabled", "WIGGLE_SEARCH_ENABLED", false),
-                    Duration.ofMillis(Long.parseLong(strProp("wiggle.search.retentionMillis",
+            return new Search(s.getBoolean("wiggle.search.enabled", "WIGGLE_SEARCH_ENABLED", false),
+                    Duration.ofMillis(Long.parseLong(s.get("wiggle.search.retentionMillis",
                             "WIGGLE_SEARCH_RETENTION_MILLIS", String.valueOf(Duration.ofDays(30).toMillis())).trim())),
                     workflows,
-                    Duration.ofMillis(intProp("wiggle.search.upkeepMillis", "WIGGLE_SEARCH_UPKEEP_MILLIS", 60_000)));
+                    Duration.ofMillis(s.getInt("wiggle.search.upkeepMillis", "WIGGLE_SEARCH_UPKEEP_MILLIS", 60_000)));
         }
     }
 
@@ -77,11 +82,15 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         }
 
         public static Auth fromEnvironment() {
-            if (strProp("wiggle.grpc.auth", "WIGGLE_GRPC_AUTH", null) != null) {
+            return from(Settings.system());
+        }
+
+        public static Auth from(Settings s) {
+            if (s.get("wiggle.grpc.auth", "WIGGLE_GRPC_AUTH", null) != null) {
                 throw new IllegalArgumentException("WIGGLE_GRPC_AUTH (wiggle.grpc.auth) was renamed WIGGLE_API_AUTH "
                         + "(wiggle.api.auth); set that instead, so authorization is not silently left off");
             }
-            String mode = strProp("wiggle.api.auth", "WIGGLE_API_AUTH", "off").trim().toUpperCase(java.util.Locale.ROOT);
+            String mode = s.get("wiggle.api.auth", "WIGGLE_API_AUTH", "off").trim().toUpperCase(java.util.Locale.ROOT);
             ApiAuth api;
             try {
                 api = ApiAuth.valueOf(mode);
@@ -89,7 +98,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
                 throw new IllegalArgumentException("WIGGLE_API_AUTH='" + mode.toLowerCase(java.util.Locale.ROOT)
                         + "' is not one of off, log, enforce");
             }
-            return new Auth(api, Duration.ofMillis(intProp("wiggle.auth.cacheMillis", "WIGGLE_AUTH_CACHE_MILLIS", 30_000)));
+            return new Auth(api, Duration.ofMillis(s.getInt("wiggle.auth.cacheMillis", "WIGGLE_AUTH_CACHE_MILLIS", 30_000)));
         }
     }
 
@@ -115,13 +124,17 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         }
 
         public static Memory fromEnvironment() {
+            return from(Settings.system());
+        }
+
+        public static Memory from(Settings s) {
             return new Memory(
-                    boolProp("wiggle.memory.shedding.enabled", "WIGGLE_MEMORY_SHEDDING_ENABLED", false),
-                    doubleProp("wiggle.memory.threshold", "WIGGLE_MEMORY_THRESHOLD", 0.90),
-                    doubleProp("wiggle.memory.rejectRatio", "WIGGLE_MEMORY_REJECT_RATIO", 0.10),
-                    Duration.ofMillis(intProp("wiggle.memory.retryMillis",
+                    s.getBoolean("wiggle.memory.shedding.enabled", "WIGGLE_MEMORY_SHEDDING_ENABLED", false),
+                    s.getDouble("wiggle.memory.threshold", "WIGGLE_MEMORY_THRESHOLD", 0.90),
+                    s.getDouble("wiggle.memory.rejectRatio", "WIGGLE_MEMORY_REJECT_RATIO", 0.10),
+                    Duration.ofMillis(s.getInt("wiggle.memory.retryMillis",
                             "WIGGLE_MEMORY_RETRY_MILLIS", 2_000)),
-                    Duration.ofMillis(intProp("wiggle.memory.retryJitterMillis",
+                    Duration.ofMillis(s.getInt("wiggle.memory.retryJitterMillis",
                             "WIGGLE_MEMORY_RETRY_JITTER_MILLIS", 1_000)));
         }
     }
@@ -214,35 +227,40 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
     }
 
     public static ServerConfig fromEnvironment() {
+        return from(Settings.system());
+    }
+
+    /** The config {@code s} sets, each setting by its {@code wiggle.*} property or {@code WIGGLE_*} environment name. */
+    public static ServerConfig from(Settings s) {
         return new ServerConfig(
-                intProp("wiggle.port", "WIGGLE_PORT", 8080),
-                strProp("wiggle.node.name", "WIGGLE_NODE_NAME", defaultNodeName()),
-                strProp("wiggle.jdbc.url", "WIGGLE_JDBC_URL", null),
-                strProp("wiggle.jdbc.user", "WIGGLE_JDBC_USER", null),
-                strProp("wiggle.jdbc.password", "WIGGLE_JDBC_PASSWORD", null),
-                intProp("wiggle.jdbc.poolSize", "WIGGLE_JDBC_POOL_SIZE", 10),
-                Duration.ofMillis(intProp("wiggle.poll.intervalMillis", "WIGGLE_POLL_INTERVAL_MILLIS", 1000)),
-                Duration.ofMillis(intProp("wiggle.heartbeat.intervalMillis", "WIGGLE_HEARTBEAT_INTERVAL_MILLIS", 5000)),
-                intProp("wiggle.heartbeat.missedBeforeDead", "WIGGLE_MISSED_HEARTBEATS", 3),
-                Duration.ofMillis(intProp("wiggle.lease.millis", "WIGGLE_LEASE_MILLIS", 30_000)),
-                Duration.ofMillis(intProp("wiggle.longpoll.maxMillis", "WIGGLE_LONGPOLL_MAX_MILLIS", 20_000)),
-                Duration.ofMillis(intProp("wiggle.retention.millis", "WIGGLE_RETENTION_MILLIS", 86_400_000)),
-                intProp("wiggle.housekeeping.batch", "WIGGLE_HOUSEKEEPING_BATCH", 100),
+                s.getInt("wiggle.port", "WIGGLE_PORT", 8080),
+                s.get("wiggle.node.name", "WIGGLE_NODE_NAME", defaultNodeName()),
+                s.get("wiggle.jdbc.url", "WIGGLE_JDBC_URL", null),
+                s.get("wiggle.jdbc.user", "WIGGLE_JDBC_USER", null),
+                s.get("wiggle.jdbc.password", "WIGGLE_JDBC_PASSWORD", null),
+                s.getInt("wiggle.jdbc.poolSize", "WIGGLE_JDBC_POOL_SIZE", 10),
+                Duration.ofMillis(s.getInt("wiggle.poll.intervalMillis", "WIGGLE_POLL_INTERVAL_MILLIS", 1000)),
+                Duration.ofMillis(s.getInt("wiggle.heartbeat.intervalMillis", "WIGGLE_HEARTBEAT_INTERVAL_MILLIS", 5000)),
+                s.getInt("wiggle.heartbeat.missedBeforeDead", "WIGGLE_MISSED_HEARTBEATS", 3),
+                Duration.ofMillis(s.getInt("wiggle.lease.millis", "WIGGLE_LEASE_MILLIS", 30_000)),
+                Duration.ofMillis(s.getInt("wiggle.longpoll.maxMillis", "WIGGLE_LONGPOLL_MAX_MILLIS", 20_000)),
+                Duration.ofMillis(s.getInt("wiggle.retention.millis", "WIGGLE_RETENTION_MILLIS", 86_400_000)),
+                s.getInt("wiggle.housekeeping.batch", "WIGGLE_HOUSEKEEPING_BATCH", 100),
                 // The read-only web dashboard. 0 = off; set a port to enable it.
-                intProp("wiggle.dashboard.port", "WIGGLE_DASHBOARD_PORT", 0),
+                s.getInt("wiggle.dashboard.port", "WIGGLE_DASHBOARD_PORT", 0),
                 // HTTP Basic credentials for the dashboard/API; no password => unauthenticated.
-                strProp("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
-                strProp("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),
+                s.get("wiggle.dashboard.user", "WIGGLE_DASHBOARD_USER", "admin"),
+                s.get("wiggle.dashboard.password", "WIGGLE_DASHBOARD_PASSWORD", null),
                 // TLS for the API and the portal; no keystore => plaintext, no truststore => no client-cert (mTLS).
-                Tls.Options.fromEnvironment(),
+                Tls.Options.from(s),
                 // Memory-pressure load shedding; disabled unless WIGGLE_MEMORY_SHEDDING_ENABLED=true.
-                Memory.fromEnvironment(),
+                Memory.from(s),
                 // Several databases (WIGGLE_STORAGE_TOPOLOGY); unset for one database or none.
-                TopologyParser.fromEnvironment(System.getenv()).orElse(null),
+                TopologyParser.fromEnvironment(s.byEnvName()).orElse(null),
                 // Per-RPC authorization; off unless WIGGLE_API_AUTH is log or enforce.
-                Auth.fromEnvironment(),
+                Auth.from(s),
                 // Full-text search; on one database, off unless WIGGLE_SEARCH_ENABLED=true.
-                Search.fromEnvironment());
+                Search.from(s));
     }
 
     public boolean isInMemory() {
@@ -256,7 +274,7 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
      * at a time, so it is off unless {@code WIGGLE_ALLOW_GRAPH_REPLACE=true}.
      */
     public static boolean allowGraphReplace() {
-        return boolProp("wiggle.allowGraphReplace", "WIGGLE_ALLOW_GRAPH_REPLACE", false);
+        return Settings.system().getBoolean("wiggle.allowGraphReplace", "WIGGLE_ALLOW_GRAPH_REPLACE", false);
     }
 
     private static String defaultNodeName() {
@@ -265,26 +283,5 @@ public record ServerConfig(int port, String nodeName, String jdbcUrl, String jdb
         } catch (Exception e) {
             return "wiggle-node";
         }
-    }
-
-    private static String strProp(String sysProp, String env, String def) {
-        String v = System.getProperty(sysProp);
-        if (v == null) v = System.getenv(env);
-        return v == null || v.isBlank() ? def : v;
-    }
-
-    private static int intProp(String sysProp, String env, int def) {
-        String v = strProp(sysProp, env, null);
-        return v == null ? def : Integer.parseInt(v.trim());
-    }
-
-    private static boolean boolProp(String sysProp, String env, boolean def) {
-        String v = strProp(sysProp, env, null);
-        return v == null ? def : Boolean.parseBoolean(v.trim());
-    }
-
-    private static double doubleProp(String sysProp, String env, double def) {
-        String v = strProp(sysProp, env, null);
-        return v == null ? def : Double.parseDouble(v.trim());
     }
 }

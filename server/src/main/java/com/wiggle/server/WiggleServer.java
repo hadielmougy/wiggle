@@ -1,5 +1,6 @@
 package com.wiggle.server;
 
+import com.wiggle.server.api.ApiServlet;
 import com.wiggle.server.auth.Accounts;
 import com.wiggle.server.auth.AuthCache;
 import com.wiggle.server.cluster.ClusterManager;
@@ -38,6 +39,18 @@ public final class WiggleServer implements AutoCloseable {
     private final AuthCache authCache;
 
     public WiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
+        this(config, storageFactory, true);
+    }
+
+    /**
+     * A node whose API a servlet container serves, through {@link #apiServlet()}, instead of a server of
+     * its own on the configured port.
+     */
+    public static WiggleServer withoutApiServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
+        return new WiggleServer(config, storageFactory, false);
+    }
+
+    private WiggleServer(ServerConfig config, StorageFactory storageFactory, boolean servesApi) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
@@ -49,7 +62,7 @@ public final class WiggleServer implements AutoCloseable {
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead(),
                 topology == null ? 0 : topology.newestGeneration().id(),
                 topology == null ? () -> 0 : () -> topology.generationAt(System.currentTimeMillis()).id());
-        this.bundle = new ServerBundle(config, storage, cluster, authCache);
+        this.bundle = new ServerBundle(config, storage, cluster, authCache, servesApi);
     }
 
     public WiggleServer start() {
@@ -57,12 +70,16 @@ public final class WiggleServer implements AutoCloseable {
         cluster.start();
         bundle.start();
         LOG.log(System.Logger.Level.INFO, () -> "server node '" + config.nodeName()
-                + "' started on port " + port()
+                + "' started" + (port() < 0 ? "" : " on port " + port())
                 + " (storage: " + (config.isInMemory() ? "in-memory" : "jdbc") + ")");
         return this;
     }
 
+    /** The port the node's own API server listens on; -1 for a node {@link #withoutApiServer}. */
     public int port() { return bundle.port(); }
+
+    /** The API as a servlet, for {@code ControlPlane.PREFIX + "*"}. */
+    public ApiServlet apiServlet() { return bundle.apiServlet(); }
 
     /** This node's API address on the loopback interface, for in-process clients and local runs. */
     public String baseUrl() { return "127.0.0.1:" + port(); }

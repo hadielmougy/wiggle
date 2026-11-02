@@ -84,7 +84,7 @@ class HttpApiTest {
     void tooLarge() throws Exception {
         try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
              HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()) {
-            byte[] body = new byte[HttpApi.MAX_BODY_BYTES + 1];
+            byte[] body = new byte[ApiServlet.MAX_BODY_BYTES + 1];
             HttpResponse<String> resp = http.send(HttpRequest.newBuilder(URI.create("http://" + server.baseUrl()
                             + ControlPlane.START_INSTANCE.path()))
                     .header("Content-Type", ControlPlane.JSON)

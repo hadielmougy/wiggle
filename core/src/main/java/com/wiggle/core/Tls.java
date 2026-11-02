@@ -39,17 +39,16 @@ public final class Tls {
 
         /** Reads {@code WIGGLE_TLS_KEYSTORE[_PASSWORD]} / {@code WIGGLE_TLS_TRUSTSTORE[_PASSWORD]}. */
         public static Options fromEnvironment() {
-            return new Options(
-                    prop("wiggle.tls.keystore", "WIGGLE_TLS_KEYSTORE"),
-                    prop("wiggle.tls.keystore.password", "WIGGLE_TLS_KEYSTORE_PASSWORD"),
-                    prop("wiggle.tls.truststore", "WIGGLE_TLS_TRUSTSTORE"),
-                    prop("wiggle.tls.truststore.password", "WIGGLE_TLS_TRUSTSTORE_PASSWORD"));
+            return from(Settings.system());
         }
 
-        private static String prop(String sysProp, String env) {
-            String v = System.getProperty(sysProp);
-            if (v == null) v = System.getenv(env);
-            return v == null || v.isBlank() ? null : v;
+        /** {@link #fromEnvironment()} from {@code settings}. */
+        public static Options from(Settings settings) {
+            return new Options(
+                    settings.get("wiggle.tls.keystore", "WIGGLE_TLS_KEYSTORE"),
+                    settings.get("wiggle.tls.keystore.password", "WIGGLE_TLS_KEYSTORE_PASSWORD"),
+                    settings.get("wiggle.tls.truststore", "WIGGLE_TLS_TRUSTSTORE"),
+                    settings.get("wiggle.tls.truststore.password", "WIGGLE_TLS_TRUSTSTORE_PASSWORD"));
         }
     }
 
