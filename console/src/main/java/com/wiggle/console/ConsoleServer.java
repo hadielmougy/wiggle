@@ -1,13 +1,12 @@
 package com.wiggle.console;
 
 import com.wiggle.core.Tls;
+import com.wiggle.server.http.TomcatTls;
 import org.apache.catalina.Context;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
 import org.apache.tomcat.util.descriptor.web.FilterDef;
 import org.apache.tomcat.util.descriptor.web.FilterMap;
-import org.apache.tomcat.util.net.SSLHostConfig;
-import org.apache.tomcat.util.net.SSLHostConfigCertificate;
 
 /**
  * The console's embedded Tomcat: one {@link DashboardServlet} mapped to {@code /*} behind an
@@ -28,7 +27,7 @@ final class ConsoleServer implements AutoCloseable {
 
         Connector connector = new Connector("HTTP/1.1");
         connector.setPort(port);
-        if (tls.hasKeyStore()) configureTls(connector, tls);
+        if (tls.hasKeyStore()) TomcatTls.configure(connector, tls);
         tomcat.setConnector(connector);
 
         Context ctx = tomcat.addContext("", null);
@@ -65,22 +64,5 @@ final class ConsoleServer implements AutoCloseable {
         } catch (org.apache.catalina.LifecycleException ignored) {
             // best effort on shutdown
         }
-    }
-
-    private static void configureTls(Connector connector, Tls.Options tls) {
-        connector.setSecure(true);
-        connector.setScheme("https");
-        connector.setProperty("SSLEnabled", "true");
-        SSLHostConfig ssl = new SSLHostConfig();
-        SSLHostConfigCertificate cert = new SSLHostConfigCertificate(ssl, SSLHostConfigCertificate.Type.UNDEFINED);
-        cert.setCertificateKeystoreFile(tls.keyStorePath());
-        if (tls.keyStorePassword() != null) cert.setCertificateKeystorePassword(tls.keyStorePassword());
-        ssl.addCertificate(cert);
-        if (tls.hasTrustStore()) {
-            ssl.setTruststoreFile(tls.trustStorePath());
-            if (tls.trustStorePassword() != null) ssl.setTruststorePassword(tls.trustStorePassword());
-            ssl.setCertificateVerification("required");   // mTLS: require a trusted client cert
-        }
-        connector.addSslHostConfig(ssl);
     }
 }

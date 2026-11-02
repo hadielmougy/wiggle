@@ -2,12 +2,11 @@ package com.wiggle.server.api;
 
 import com.wiggle.core.Tls;
 import com.wiggle.core.wire.ControlPlane;
+import com.wiggle.server.http.TomcatTls;
 import org.apache.catalina.Context;
 import org.apache.catalina.LifecycleException;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
-import org.apache.tomcat.util.net.SSLHostConfig;
-import org.apache.tomcat.util.net.SSLHostConfigCertificate;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -37,7 +36,9 @@ public final class HttpApi implements AutoCloseable {
         connector.setPort(port);
         connector.getProtocolHandler().setExecutor(pool);
         if (tls.hasKeyStore()) {
-            configureTls(connector, tls);
+            TomcatTls.configure(connector, tls);
+            LOG.log(System.Logger.Level.INFO, tls.hasTrustStore() ? "API TLS enabled with required client certificates (mTLS)"
+                    : "API TLS enabled (server-side)");
         } else {
             LOG.log(System.Logger.Level.WARNING, "API is PLAINTEXT; set WIGGLE_TLS_KEYSTORE to enable TLS");
         }
@@ -46,26 +47,6 @@ public final class HttpApi implements AutoCloseable {
         Context ctx = tomcat.addContext("", null);
         Tomcat.addServlet(ctx, "api", servlet);
         ctx.addServletMappingDecoded(ControlPlane.PREFIX + "*", "api");
-    }
-
-    private static void configureTls(Connector connector, Tls.Options tls) {
-        connector.setSecure(true);
-        connector.setScheme("https");
-        connector.setProperty("SSLEnabled", "true");
-        SSLHostConfig ssl = new SSLHostConfig();
-        SSLHostConfigCertificate cert = new SSLHostConfigCertificate(ssl, SSLHostConfigCertificate.Type.UNDEFINED);
-        cert.setCertificateKeystoreFile(tls.keyStorePath());
-        if (tls.keyStorePassword() != null) cert.setCertificateKeystorePassword(tls.keyStorePassword());
-        ssl.addCertificate(cert);
-        if (tls.hasTrustStore()) {
-            ssl.setTruststoreFile(tls.trustStorePath());
-            if (tls.trustStorePassword() != null) ssl.setTruststorePassword(tls.trustStorePassword());
-            ssl.setCertificateVerification("required");
-            LOG.log(System.Logger.Level.INFO, "API TLS enabled with required client certificates (mTLS)");
-        } else {
-            LOG.log(System.Logger.Level.INFO, "API TLS enabled (server-side)");
-        }
-        connector.addSslHostConfig(ssl);
     }
 
     public void start() {

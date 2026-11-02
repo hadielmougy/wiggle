@@ -5,6 +5,7 @@ import com.wiggle.console.Portal;
 import com.wiggle.core.Settings;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.server.http.TomcatTls;
 import jakarta.servlet.Filter;
 import org.apache.catalina.connector.Connector;
 import org.apache.tomcat.util.threads.VirtualThreadExecutor;
@@ -53,10 +54,11 @@ class PortalConfiguration {
     }
 
     @Bean
-    WebServerFactoryCustomizer<TomcatServletWebServerFactory> portalConnector(PortalPort port) {
+    WebServerFactoryCustomizer<TomcatServletWebServerFactory> portalConnector(PortalPort port, ServerConfig config) {
         return factory -> {
             Connector connector = new Connector();
             connector.setPort(port.value());
+            if (config.tls().hasKeyStore()) TomcatTls.configure(connector, config.tls());
             connector.getProtocolHandler().setExecutor(new VirtualThreadExecutor("portal-"));
             factory.addAdditionalConnectors(connector);
         };

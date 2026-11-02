@@ -6,6 +6,7 @@ import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.api.ApiServlet;
+import com.wiggle.server.http.TomcatTls;
 import com.wiggle.server.store.StorageFactory;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
@@ -19,6 +20,8 @@ import java.io.IOException;
 /** The node: its settings, its store and its parts, and the API servlet on the web server's port. */
 @Configuration(proxyBeanMethods = false)
 class NodeConfiguration {
+
+    private static final System.Logger LOG = System.getLogger(NodeConfiguration.class.getName());
 
     /** Each setting from Spring's environment, by its {@code wiggle.*} property name or its {@code WIGGLE_*} one. */
     @Bean
@@ -49,9 +52,16 @@ class NodeConfiguration {
         return new ServletRegistrationBean<>(server.apiServlet(), ControlPlane.PREFIX + "*");
     }
 
-    /** The web server listens on {@code WIGGLE_PORT}. */
+    /** The web server listens on {@code WIGGLE_PORT}, over TLS when {@code WIGGLE_TLS_KEYSTORE} is set. */
     @Bean
     WebServerFactoryCustomizer<TomcatServletWebServerFactory> apiPort(ServerConfig config) {
-        return factory -> factory.setPort(config.port());
+        return factory -> {
+            factory.setPort(config.port());
+            if (config.tls().hasKeyStore()) {
+                factory.addConnectorCustomizers(connector -> TomcatTls.configure(connector, config.tls()));
+            } else {
+                LOG.log(System.Logger.Level.WARNING, "API is PLAINTEXT; set WIGGLE_TLS_KEYSTORE to enable TLS");
+            }
+        };
     }
 }
