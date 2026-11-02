@@ -899,7 +899,7 @@ reported per node. A worker that stops polling stops counting as cover once its 
 ### 7.6 Benchmarking
 
 ```bash
-# in-memory (async ≈ sync, commits are free):
+# no database configured: H2 in memory
 WIGGLE_EXECUTION_MODE=LOCAL_ASYNC ./gradlew :example:bench
 
 # against Postgres (async wins — far fewer WAL fsyncs):

@@ -66,3 +66,7 @@ interleaved runs, not against these numbers alone.
 
 Replacing in-memory storage with H2 costs the suite about 4 s, inside the noise. The in-memory
 benchmark never touches the JDBC store, so the PostgreSQL rows are the ones phase 1 must hold.
+
+From 1g on, a run with no database configured is on H2 in memory: 9.6–10.0k steps/s in `SERVER` and
+50.8–54.5k in `LOCAL_ASYNC`, against 20.9–27.6k and 112–115k on the removed in-memory store
+(interleaved, same laptop).

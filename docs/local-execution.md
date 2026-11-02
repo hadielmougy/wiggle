@@ -9,8 +9,7 @@ Status: **Phase 0–2 implemented + `.checkpoint()` + graceful-shutdown drain** 
 
 > **Benchmark (linear 20-step pipeline, 1000 instances, 4 workers × 16, Postgres):**
 > SERVER 15 inst/s · LOCAL_SYNC 102 inst/s · **LOCAL_ASYNC 213 inst/s**. Async is ~2× sync on a
-> real DB because a 20-step run commits once (≈20× fewer WAL fsyncs) rather than per step; on the
-> in-memory store, where commits are ~free, async ≈ sync. Reproduce with `./gradlew :example:bench`
+> real DB because a 20-step run commits once (≈20× fewer WAL fsyncs) rather than per step. Reproduce with `./gradlew :example:bench`
 > (set `WIGGLE_EXECUTION_MODE`, `WIGGLE_JDBC_URL`, `WIGGLE_BENCH_*`).
 
 > **Implemented:** the `GraphTraversal` seam (`core`), `ExecutionMode` on the definition (in the

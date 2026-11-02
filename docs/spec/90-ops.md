@@ -307,9 +307,9 @@ relocated so it has zero transitive dependencies.
 Not requirements — the measured shape of the system, so a deployment knows what to expect. Reproduce
 with the tools in `example`.
 
-**WGL-OPS-090** (SHOULD) Single-JVM engine throughput (embedded server, in-memory store, 20-step
-workflow, 4 workers): `SERVER` ≈ 962 instances/s (19.2k step completions/s); `LOCAL_SYNC` ≈ 1,379
-instances/s; `LOCAL_ASYNC` ≈ 4,402 instances/s (88.0k steps/s).
+**WGL-OPS-090** (SHOULD) Single-JVM engine throughput (embedded server, H2 in memory, 20-step
+workflow, 4 workers): `SERVER` ≈ 490 instances/s (9.8k step completions/s); `LOCAL_SYNC` ≈ 810
+instances/s (16.2k steps/s); `LOCAL_ASYNC` ≈ 2,630 instances/s (52.6k steps/s).
 
 **WGL-OPS-091** (SHOULD) One server node on one PostgreSQL 16 on a 10-core laptop sustains ≈ 300 durable
 workflow starts/s (≈ 2,400 durable step executions/s) at ≈ 1 s end-to-end completion latency, with
