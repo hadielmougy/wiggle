@@ -14,7 +14,7 @@ still behaves the same.
 |---|---|
 | Spring Boot | 4.1.x (Spring Framework 7.0.x) on Java 21; 3.5 is the last 3.x line |
 | Jackson | Boot 4.1 manages Jackson 2 at 2.21.x, so `jackson-core` stays on 2.21.x and follows Boot's patch level |
-| Transaction boundaries | `@Transactional` only where the database never changes (accounts on the auth shard, definitions and cluster state on the home shard); `ShardTransactions`, one `TransactionTemplate` per shard, wherever the shard depends on the instance |
+| Transaction boundaries | `ShardTransactions` everywhere, one `TransactionTemplate` per shard. `@Transactional` was dropped even for services on one fixed database: it would bypass the replay of rolled-back transient failures, failure classification and shard-outage marking, and the bound `Repositories` |
 | Retry | Ours, around `TransactionTemplate`: replay only a rolled-back transient failure; a failure during commit is ambiguous and never retried |
 | Nesting | A nested call on the same shard joins the open transaction; one on another shard is refused |
 | Write buffer | `BufferedTx` becomes a buffer tied to the Spring transaction, flushed just before commit |
@@ -32,7 +32,7 @@ still behaves the same.
    - 1c. `Tx` splits into repositories on `JdbcTemplate`, with the same SQL.
    - 1d. Call sites move to `ShardTransactions` and the repositories, file by file.
    - 1e. `BufferedTx` becomes a buffer tied to the Spring transaction.
-   - 1f. Moved to the start of phase 2: `@Transactional` needs the services to be Spring beans.
+   - 1f. Dropped (see Transaction boundaries).
    - 1g. `InMemoryStorage`, `Storage.inTx*`, `Tx` and `ReadTx` are removed; tests move to H2.
 2. The `boot` module (Spring Boot 4.1.2):
    - 2a. A Boot application: settings read through Spring's `Environment` under the `WIGGLE_*` names,
@@ -42,8 +42,6 @@ still behaves the same.
    - 2c. Actuator on the probe port (`WIGGLE_DASHBOARD_PORT`) in place of `HealthServer`.
    - 2d. TLS and mTLS on both connectors from the `WIGGLE_TLS_*` settings.
    - 2e. HTTP/2 on the server side.
-   - 2f. (was 1f) Services on one fixed database move to `@Transactional`, over beans for the shard
-     `DataSource`s and transaction managers.
 3. Test support: `@WiggleBootTest`, a few named profiles, `WiggleTestNodes` for multi-node tests, and a
    two-class pilot that decides whether every test runs in a Spring context.
 4. Tests converted in batches.
