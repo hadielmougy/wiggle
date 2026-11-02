@@ -42,8 +42,10 @@ still behaves the same.
    - 2c. Actuator on the probe port (`WIGGLE_DASHBOARD_PORT`) in place of `HealthServer`.
    - 2d. TLS and mTLS on both connectors from the `WIGGLE_TLS_*` settings.
    - 2e. HTTP/2 on the server side.
-3. Test support: `@WiggleBootTest`, a few named profiles, `WiggleTestNodes` for multi-node tests, and a
-   two-class pilot that decides whether every test runs in a Spring context.
+3. Test support, in `boot`'s test fixtures: `@WiggleBootTest` (one node, H2 in memory, ports from
+   `TestPorts`, fast timings, the process's own `WIGGLE_*` variables hidden), the `portal`, `probe` and
+   `postgres` profiles, and `WiggleTestNodes` for several nodes on one database. The pilot converted
+   `HttpApiTest` and `CompetingConsumersTest` and added `ClusterNodesTest`; see the pilot below.
 4. Tests converted in batches.
 5. Packaging: the image runs the Boot jar; `dist` and `HealthServer` are retired.
 6. Measure against the baselines below and tune; HTTP/2 between client and server.
@@ -75,3 +77,29 @@ benchmark never touches the JDBC store, so the PostgreSQL rows are the ones phas
 From 1g on, a run with no database configured is on H2 in memory: 9.6–10.0k steps/s in `SERVER` and
 50.8–54.5k in `LOCAL_ASYNC`, against 20.9–27.6k and 112–115k on the removed in-memory store
 (interleaved, same laptop).
+
+## Phase 3 pilot
+
+| Measure | Result |
+|---|---|
+| `HttpApiTest`, 3 runs | 0.82–0.88 s with a server per test, 0.51–0.53 s on one shared node |
+| `CompetingConsumersTest`, 3 runs | 0.62–0.63 s with a server per test, 0.49–0.52 s on one shared node |
+| Starting a node's context | about 0.9 s, once per distinct test configuration |
+| `ClusterNodesTest`, two nodes, two tests | 1.3–1.4 s |
+| Whole suite with `tests` on Boot's managed versions (JUnit 6, Tomcat 11, Hikari 7, H2 2.4) | 112 s, against 110 s; nothing new fails |
+
+Of 142 test classes, 57 start a node and 47 work on a store or an engine without one.
+
+What the pilot found:
+
+- Tests that share a node must not share a queue. A worker closed by one test leaves its long poll
+  on the server, and that poll can still claim the next test's token, which then waits out its lease.
+  Before, each test's own server stopped the poll. A worker stopping mid-poll strands tokens the same
+  way in production; the server should release what it claimed when it cannot deliver it.
+- Tests that set a different configuration per method need one context each, through `@Nested`
+  classes or test properties. Spring caches up to 32 of them.
+
+Recommended for phase 4: not every test runs in a Spring context. The 57 that start a node move to
+`@WiggleBootTest` or `WiggleTestNodes`, each test on queues of its own. Tests of a store or an engine
+stay plain JUnit on `PostgresStorageFactory.inMemory()`; a context would add a node they never call.
+

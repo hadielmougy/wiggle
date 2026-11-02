@@ -1,16 +1,14 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
-import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -33,7 +31,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * both run the same token. There is no server-side handler registry; a step's logic lives per-worker,
  * and the token row is the only arbiter of who runs what.
  */
+@WiggleBootTest
 class CompetingConsumersTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The step this spec names; a worker binds it by name. */
     interface OneStep {
@@ -46,9 +47,9 @@ class CompetingConsumersTest {
         return n;
     }
 
-    /** A single-step workflow whose one step both workers will serve. */
-    private static FlowSpec oneStep() {
-        return FlowSpec.define("competing", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
+    /** A single-step workflow named {@code name}, whose one step both workers will serve; each test has its own. */
+    private static FlowSpec oneStep(String name) {
+        return FlowSpec.define(name, 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
     }
 
     /**
@@ -56,7 +57,6 @@ class CompetingConsumersTest {
      * worker's id and shares the recording structures, so the test can see which worker ran each
      * token and how many times each token ran.
      */
-    @ForFlow("competing")
     static final class CountingH {
         final String worker;
         final Map<Object, String> ranBy;         // instance key -> the worker that ran it
@@ -98,13 +98,6 @@ class CompetingConsumersTest {
         }
     }
 
-    private WiggleServer server() throws Exception {
-        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        return new WiggleServer(config, new PostgresStorageFactory()).start();
-    }
-
     /** One-at-a-time workers, so a poll claims a single token and the sibling gets the next one. */
     private static WorkerOptions serial() {
         return WorkerOptions.defaults().withConcurrency(1);
@@ -113,9 +106,8 @@ class CompetingConsumersTest {
     @Test
     @DisplayName("two workers on the same step claim tokens concurrently (a 2-party barrier clears)")
     void twoWorkersConsumeInParallel() throws Exception {
-        try (WiggleServer server = server();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
-            client.register(oneStep());
+        try (WiggleClient client = node.client()) {
+            client.register(oneStep("competing-pair"));
 
             Map<Object, String> ranBy = new ConcurrentHashMap<>();
             Map<Object, Integer> runsPerKey = new ConcurrentHashMap<>();
@@ -126,13 +118,13 @@ class CompetingConsumersTest {
 
             try (Worker a = new Worker(client, "consumer-a", serial());
                  Worker b = new Worker(client, "consumer-b", serial())) {
-                a.registerHandler(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, rendezvous, null));
-                b.registerHandler(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, rendezvous, null));
+                a.registerHandler("competing-pair", new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, rendezvous, null));
+                b.registerHandler("competing-pair", new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, rendezvous, null));
                 a.start();
                 b.start();
 
-                String i1 = client.start("competing", Map.of("n", 1));
-                String i2 = client.start("competing", Map.of("n", 2));
+                String i1 = client.start("competing-pair", Map.of("n", 1));
+                String i2 = client.start("competing-pair", Map.of("n", 2));
                 assertEquals("COMPLETED", client.awaitCompletion(i1, Duration.ofSeconds(20)).status(), "i1");
                 assertEquals("COMPLETED", client.awaitCompletion(i2, Duration.ofSeconds(20)).status(), "i2");
             }
@@ -148,9 +140,8 @@ class CompetingConsumersTest {
     @DisplayName("under contention every token runs exactly once and the load is shared")
     void eachTokenRunsExactlyOnce() throws Exception {
         int instances = 12;
-        try (WiggleServer server = server();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
-            client.register(oneStep());
+        try (WiggleClient client = node.client()) {
+            client.register(oneStep("competing-shared"));
 
             Map<Object, String> ranBy = new ConcurrentHashMap<>();
             Map<Object, Integer> runsPerKey = new ConcurrentHashMap<>();
@@ -159,13 +150,13 @@ class CompetingConsumersTest {
 
             try (Worker a = new Worker(client, "consumer-a", serial());
                  Worker b = new Worker(client, "consumer-b", serial())) {
-                a.registerHandler(new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, null, hold));
-                b.registerHandler(new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, null, hold));
+                a.registerHandler("competing-shared", new CountingH("consumer-a", ranBy, runsPerKey, totalRuns, null, hold));
+                b.registerHandler("competing-shared", new CountingH("consumer-b", ranBy, runsPerKey, totalRuns, null, hold));
                 a.start();
                 b.start();
 
                 String[] ids = new String[instances];
-                for (int i = 0; i < instances; i++) ids[i] = client.start("competing", Map.of("n", i));
+                for (int i = 0; i < instances; i++) ids[i] = client.start("competing-shared", Map.of("n", i));
                 for (int i = 0; i < instances; i++) {
                     assertEquals("COMPLETED", client.awaitCompletion(ids[i], Duration.ofSeconds(30)).status(),
                             "instance " + i);
