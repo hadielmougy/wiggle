@@ -7,6 +7,7 @@ import com.wiggle.core.Tls;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
+import com.wiggle.testfixtures.TestCerts;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -20,12 +21,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Base64;
-import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,7 +42,7 @@ class TlsTest {
         Map<String, Object> work(Map<String, Object> ctx);
     }
 
-    private static final String STORE = "storepass";
+    private static final String STORE = TestCerts.PASSWORD;
 
     @TempDir static Path dir;
     private static Path serverKs, clientKs, trust;
@@ -59,22 +57,12 @@ class TlsTest {
 
     @BeforeAll
     static void generateCerts() throws Exception {
-        Assumptions.assumeTrue(Files.isExecutable(Path.of(keytool())), "keytool must be available");
-        serverKs = dir.resolve("server.p12");
-        clientKs = dir.resolve("client.p12");
-        trust = dir.resolve("trust.p12");
-        Path serverCrt = dir.resolve("server.crt");
-        Path clientCrt = dir.resolve("client.crt");
-
-        // Server identity is reachable as both localhost and 127.0.0.1 (baseUrl() uses the IP).
-        genKeypair(serverKs, "server", "CN=localhost", "SAN=dns:localhost,ip:127.0.0.1");
-        genKeypair(clientKs, "client", "CN=wiggle-client", null);
-        exportCert(serverKs, "server", serverCrt);
-        exportCert(clientKs, "client", clientCrt);
-        importCert(trust, "server", serverCrt);   // one truststore trusts both identities
-        importCert(trust, "client", clientCrt);
+        Assumptions.assumeTrue(TestCerts.available(), "keytool must be available");
+        TestCerts certs = TestCerts.generate(dir);
+        serverKs = certs.serverKeyStore();
+        clientKs = certs.clientKeyStore();
+        trust = certs.trustStore();
     }
-
 
     @Test @DisplayName("API server-side TLS: a trusting client works, a plaintext client is refused")
     void apiServerTls() throws Exception {
@@ -169,38 +157,5 @@ class TlsTest {
 
     private static int freePort() {
         return TestPorts.free();
-    }
-
-
-    private static String keytool() {
-        return System.getProperty("java.home") + "/bin/keytool";
-    }
-
-    private static void genKeypair(Path ks, String alias, String dname, String san) throws Exception {
-        List<String> args = new ArrayList<>(List.of(
-                "-genkeypair", "-alias", alias, "-keyalg", "RSA", "-keysize", "2048", "-validity", "2",
-                "-dname", dname, "-keystore", ks.toString(), "-storetype", "PKCS12",
-                "-storepass", STORE, "-keypass", STORE));
-        if (san != null) { args.add("-ext"); args.add(san); }
-        keytool(args);
-    }
-
-    private static void exportCert(Path ks, String alias, Path out) throws Exception {
-        keytool(List.of("-exportcert", "-rfc", "-alias", alias, "-keystore", ks.toString(),
-                "-storepass", STORE, "-file", out.toString()));
-    }
-
-    private static void importCert(Path trustStore, String alias, Path cert) throws Exception {
-        keytool(List.of("-importcert", "-noprompt", "-alias", alias, "-file", cert.toString(),
-                "-keystore", trustStore.toString(), "-storetype", "PKCS12", "-storepass", STORE));
-    }
-
-    private static void keytool(List<String> args) throws Exception {
-        List<String> cmd = new ArrayList<>();
-        cmd.add(keytool());
-        cmd.addAll(args);
-        Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
-        String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        if (p.waitFor() != 0) throw new IllegalStateException("keytool failed: " + args + "\n" + out);
     }
 }
