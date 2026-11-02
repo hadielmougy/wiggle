@@ -82,6 +82,8 @@ class WiggleApplicationTest {
                     HttpResponse.BodyHandlers.ofString());
             assertEquals(405, get.statusCode());
             assertEquals("POST", get.headers().firstValue("Allow").orElse(null));
+            assertEquals(404, http.send(HttpRequest.newBuilder(URI.create(base + "/healthz")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString()).statusCode(), "with no probe port, no health endpoint anywhere");
         }
     }
 }

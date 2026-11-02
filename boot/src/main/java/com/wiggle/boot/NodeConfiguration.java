@@ -41,7 +41,7 @@ class NodeConfiguration {
 
     @Bean(initMethod = "start", destroyMethod = "close")
     WiggleServer wiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
-        return WiggleServer.withoutApiServer(config, storageFactory);
+        return WiggleServer.withoutHttpServers(config, storageFactory);
     }
 
     @Bean

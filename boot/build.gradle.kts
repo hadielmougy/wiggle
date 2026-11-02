@@ -12,7 +12,8 @@ dependencies {
     implementation(project(":postgres"))
     implementation(project(":console"))
     implementation("org.springframework.boot:spring-boot-starter")
-    implementation("org.springframework.boot:spring-boot-starter-tomcat")
+    implementation("org.springframework.boot:spring-boot-starter-webmvc")   // Tomcat, and MVC for Actuator's endpoints
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
 
     testImplementation(platform(SpringBootPlugin.BOM_COORDINATES))
     testImplementation(project(":client"))

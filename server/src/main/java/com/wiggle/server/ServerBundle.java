@@ -42,10 +42,10 @@ final class ServerBundle {
     private final Search search;
     private final SearchIndexer indexer;
     private final long upkeepMillis;
-    /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none. */
+    /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none, or a container serves it. */
     private final HealthServer health;
 
-    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache, boolean servesApi)
+    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache, boolean servesHttp)
             throws IOException {
         super();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
@@ -70,9 +70,9 @@ final class ServerBundle {
         MemoryGuard memory = new MemoryGuard(config.memory());
         this.apiServlet = new ApiServlet(new ControlPlaneApi(engine, cluster, config.maxLongPoll().toMillis(), memory,
                 authz, search), authz, memory);
-        this.api = servesApi ? new HttpApi(config.port(), config.tls(), apiServlet) : null;
+        this.api = servesHttp ? new HttpApi(config.port(), config.tls(), apiServlet) : null;
         // The dashboard moved to the console; the former dashboard port now serves only /healthz.
-        this.health = config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
+        this.health = !servesHttp || config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
     }
 
     /** The search shards: the topology's, or the one database's when search is enabled on it. */

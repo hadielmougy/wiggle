@@ -43,14 +43,14 @@ public final class WiggleServer implements AutoCloseable {
     }
 
     /**
-     * A node whose API a servlet container serves, through {@link #apiServlet()}, instead of a server of
-     * its own on the configured port.
+     * A node that opens no HTTP server of its own: a servlet container serves its API, through
+     * {@link #apiServlet()}, and its probe.
      */
-    public static WiggleServer withoutApiServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
+    public static WiggleServer withoutHttpServers(ServerConfig config, StorageFactory storageFactory) throws IOException {
         return new WiggleServer(config, storageFactory, false);
     }
 
-    private WiggleServer(ServerConfig config, StorageFactory storageFactory, boolean servesApi) throws IOException {
+    private WiggleServer(ServerConfig config, StorageFactory storageFactory, boolean servesHttp) throws IOException {
         this.config = config;
         this.storage = storageFactory.create(config);
         this.storage.migrate();
@@ -62,7 +62,7 @@ public final class WiggleServer implements AutoCloseable {
                 config.heartbeatInterval().toMillis(), config.missedHeartbeatsBeforeDead(),
                 topology == null ? 0 : topology.newestGeneration().id(),
                 topology == null ? () -> 0 : () -> topology.generationAt(System.currentTimeMillis()).id());
-        this.bundle = new ServerBundle(config, storage, cluster, authCache, servesApi);
+        this.bundle = new ServerBundle(config, storage, cluster, authCache, servesHttp);
     }
 
     public WiggleServer start() {
@@ -75,7 +75,7 @@ public final class WiggleServer implements AutoCloseable {
         return this;
     }
 
-    /** The port the node's own API server listens on; -1 for a node {@link #withoutApiServer}. */
+    /** The port the node's own API server listens on; -1 for a node {@link #withoutHttpServers}. */
     public int port() { return bundle.port(); }
 
     /** The API as a servlet, for {@code ControlPlane.PREFIX + "*"}. */
