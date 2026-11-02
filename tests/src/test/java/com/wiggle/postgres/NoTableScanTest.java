@@ -18,9 +18,10 @@ import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.ShardState;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.wiggle.tests.Scenarios;
 import com.wiggle.tests.TestDb;
+import com.wiggle.tests.WatchedRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -28,7 +29,6 @@ import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
@@ -51,7 +51,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * No statement the store issues reads a whole table that grows with use. Every conformance scenario
- * runs on a PostgreSQL store, and then every {@link Tx} operation is called directly, each optional
+ * runs on a PostgreSQL store, and then every repository operation is called directly, each optional
  * filter both set and unset; a store operation this test does not call fails it. Each distinct query,
  * insert, update and delete issued is then planned generically ({@code EXPLAIN (GENERIC_PLAN)},
  * PostgreSQL 16+) with sequential scans priced out, so a {@code Seq Scan} left in a plan is one no
@@ -144,16 +144,19 @@ class NoTableScanTest {
             storage.migrate();
             JdbcStorage.Observation observation = storage.observe(seen);
             try {
-                storage.inTxVoid(tx -> everyOperation(recording(tx, called)));
+                storage.inShard(0, r -> {
+                    everyOperation(WatchedRepositories.watch(r, (m, args, out) -> called.add(signature(m))));
+                    return null;
+                });
             } finally {
                 observation.close();
             }
         }
         Set<String> missed = new TreeSet<>();
-        for (Method m : Tx.class.getMethods()) {
-            if (!Modifier.isStatic(m.getModifiers()) && !m.getName().equals("bufferWrites")
-                    && !called.contains(signature(m))) {
-                missed.add(signature(m));
+        for (Method area : WriteRepositories.class.getMethods()) {
+            if (area.getParameterCount() != 0 || !area.getReturnType().isInterface()) continue;
+            for (Method m : area.getReturnType().getMethods()) {
+                if (!Modifier.isStatic(m.getModifiers()) && !called.contains(signature(m))) missed.add(signature(m));
             }
         }
         assertEquals(Set.of(), missed, "store operations this test does not call, so cannot check");
@@ -181,11 +184,11 @@ class NoTableScanTest {
     }
 
     /**
-     * Each {@link Tx} operation at least once, and each optional filter both set and unset, so every
+     * Each repository operation at least once, and each optional filter both set and unset, so every
      * shape of statement the store builds is issued.
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void everyOperation(Tx tx) {
+    private static void everyOperation(WriteRepositories r) {
         long now = System.currentTimeMillis();
         FlowSpec flow = FlowSpec.define(WF, 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::a));
         WorkflowDefinition def = flow.definition();
@@ -193,86 +196,86 @@ class NoTableScanTest {
         Scope names = Scope.of(WF);
         Scope prefixed = Scope.parse(List.of("noscan.*", "other"));
 
-        tx.claimShardIdentity(0);
-        tx.writeShardBeat(now);
-        tx.shardIdentity();
-        tx.shardBeat();
-        tx.putShardRecord(new Rows.ShardRecord(0, ShardState.ACTIVE, now, null));
-        tx.shardRegistry();
-        tx.advanceEventPosition("c", 0, 1);
-        tx.eventPositions("c");
-        tx.oldestEventPosition(0);
+        r.shards().claimShardIdentity(0);
+        r.shards().writeShardBeat(now);
+        r.shards().shardIdentity();
+        r.shards().shardBeat();
+        r.shards().putShardRecord(new Rows.ShardRecord(0, ShardState.ACTIVE, now, null));
+        r.shards().shardRegistry();
+        r.events().advanceEventPosition("c", 0, 1);
+        r.events().eventPositions("c");
+        r.events().oldestEventPosition(0);
 
-        tx.putDefinition(WF, 1, "{}", "fp", "sha256");
-        tx.replaceDefinition(WF, 1, "{}", "fp", "sha256");
-        tx.definitionFingerprint(WF, 1);
-        tx.definition(WF, 1);
-        tx.latestVersion(WF);
-        tx.definitionNames();
-        tx.definitionVersions(WF);
-        tx.putGraph(def);
-        tx.graphNode(WF, 1, node);
-        tx.graphStartNode(WF, 1);
-        tx.graphNodeCount(WF, 1);
+        r.graph().putDefinition(WF, 1, "{}", "fp", "sha256");
+        r.graph().replaceDefinition(WF, 1, "{}", "fp", "sha256");
+        r.graph().definitionFingerprint(WF, 1);
+        r.graph().definition(WF, 1);
+        r.graph().latestVersion(WF);
+        r.graph().definitionNames();
+        r.graph().definitionVersions(WF);
+        r.graph().putGraph(def);
+        r.graph().graphNode(WF, 1, node);
+        r.graph().graphStartNode(WF, 1);
+        r.graph().graphNodeCount(WF, 1);
 
         Instance inst = instance("wfi-noscan-1", now);
         Instance other = instance("wfi-noscan-2", now);
-        tx.insertInstance(inst);
-        tx.insertInstance(other);
-        tx.lockInstance(inst.id);
-        tx.lockInstances(List.of(inst.id, other.id));
-        tx.updateInstance(inst);
-        tx.updateInstances(List.of(inst, other));
-        tx.findInstance(inst.id);
-        tx.listInstances(null, null, 10);
-        tx.listInstances(WF, null, 10);
-        tx.listInstances(null, InstanceStatus.RUNNING, 10);
-        tx.listInstances(WF, InstanceStatus.RUNNING, 10);
-        tx.findByCorrelation("corr", 10);
-        tx.countInstances(InstanceStatus.RUNNING);
-        tx.childInstanceIds(inst.id);
-        tx.insertDynNodes(inst.id, List.copyOf(def.nodes().values()));
-        tx.dynNode(node);
-        tx.dynNodeCount(inst.id);
+        r.instances().insertInstance(inst);
+        r.instances().insertInstance(other);
+        r.instances().lockInstance(inst.id);
+        r.instances().lockInstances(List.of(inst.id, other.id));
+        r.instances().updateInstance(inst);
+        r.instances().updateInstances(List.of(inst, other));
+        r.instances().findInstance(inst.id);
+        r.instances().listInstances(null, null, 10);
+        r.instances().listInstances(WF, null, 10);
+        r.instances().listInstances(null, InstanceStatus.RUNNING, 10);
+        r.instances().listInstances(WF, InstanceStatus.RUNNING, 10);
+        r.instances().findByCorrelation("corr", 10);
+        r.instances().countInstances(InstanceStatus.RUNNING);
+        r.instances().childInstanceIds(inst.id);
+        r.dynamicNodes().insertDynNodes(inst.id, List.copyOf(def.nodes().values()));
+        r.dynamicNodes().dynNode(node);
+        r.dynamicNodes().dynNodeCount(inst.id);
 
         Token task = token("t-noscan-1", inst, node, now);
         task.attributes = Map.of("region", "eu", "n", 7L);
         task.attributesChanged = true;
         Token second = token("t-noscan-2", inst, node, now);
         Token third = token("t-noscan-3", inst, node, now);
-        tx.insertToken(task);
-        tx.insertTokens(List.of(second, third));
-        tx.updateToken(task);
-        tx.updateTokens(List.of(second, third));
-        tx.findToken(task.id);
-        tx.findTokens(List.of(task.id, second.id));
-        tx.tokensOf(inst.id);
-        tx.lockInstanceOf(task.id);
-        tx.lockTask(task.id);
-        tx.joinStacksAt(inst.id, node);
-        tx.joinedAt(inst.id, node);
-        tx.awaitingSignal(inst.id, "s");
-        tx.pendingSignals(10);
-        tx.hasActiveTokens(inst.id);
-        tx.queueDepth(now);
-        tx.backlogByVersion(now, 10);
-        tx.countReady(WF, 1, QUEUE, null, now, 100);
-        tx.countReady(WF, 1, QUEUE, QueueCriteria.from(QUEUE).where(cb -> cb.like(Task_.CORRELATION_ID, "eu-%")).where(),
+        r.tokens().insertToken(task);
+        r.tokens().insertTokens(List.of(second, third));
+        r.tokens().updateToken(task);
+        r.tokens().updateTokens(List.of(second, third));
+        r.tokens().findToken(task.id);
+        r.tokens().findTokens(List.of(task.id, second.id));
+        r.tokens().tokensOf(inst.id);
+        r.locks().lockInstanceOf(task.id);
+        r.locks().lockTask(task.id);
+        r.tokens().joinStacksAt(inst.id, node);
+        r.tokens().joinedAt(inst.id, node);
+        r.tokens().awaitingSignal(inst.id, "s");
+        r.tokens().pendingSignals(10);
+        r.tokens().hasActiveTokens(inst.id);
+        r.tokens().queueDepth(now);
+        r.tokens().backlogByVersion(now, 10);
+        r.tokens().countReady(WF, 1, QUEUE, null, now, 100);
+        r.tokens().countReady(WF, 1, QUEUE, QueueCriteria.from(QUEUE).where(cb -> cb.like(Task_.CORRELATION_ID, "eu-%")).where(),
                 now, 100);
-        tx.countReady(WF, 1, QUEUE, QueueCriteria.from(QUEUE)
+        r.tokens().countReady(WF, 1, QUEUE, QueueCriteria.from(QUEUE)
                 .where(cb -> cb.equal(Task_.attr("region", String.class), "eu")).where(), now, 100);
-        tx.claimTasks("w", Set.of(QUEUE), null, 10, now, now + 60_000);
-        tx.claimTasks("w", Set.of(QUEUE), Set.of(new WorkflowVersion(WF, 1)), 10, now, now + 60_000);
-        tx.claimTasks("w", new ClaimFilter(List.of(
+        r.tokens().claimTasks("w", Set.of(QUEUE), null, 10, now, now + 60_000);
+        r.tokens().claimTasks("w", Set.of(QUEUE), Set.of(new WorkflowVersion(WF, 1)), 10, now, now + 60_000);
+        r.tokens().claimTasks("w", new ClaimFilter(List.of(
                 QueueCriteria.from(QUEUE).where(cb -> cb.equal(Task_.attr("region", String.class), "eu")),
                 QueueCriteria.from("noscan-other").where(cb -> cb.like(Task_.CORRELATION_ID, "eu-%"))), null),
                 10, now, now + 60_000);
-        tx.renewLease(task.id, "w", now + 60_000, now);
-        tx.dueTimers(now, 10);
-        tx.dueRetries(now, 10);
-        tx.dueSignals(now, 10);
-        tx.expiredLeases(now, 10);
-        tx.stepDurations(WF, 1, now - 60_000, 10);
+        r.tokens().renewLease(task.id, "w", now + 60_000, now);
+        r.tokens().dueTimers(now, 10);
+        r.tokens().dueRetries(now, 10);
+        r.tokens().dueSignals(now, 10);
+        r.tokens().expiredLeases(now, 10);
+        r.tokens().stepDurations(WF, 1, now - 60_000, 10);
 
         Rows.CompLog comp = new Rows.CompLog();
         comp.instanceId = inst.id;
@@ -282,10 +285,10 @@ class NoTableScanTest {
         comp.queue = QUEUE;
         comp.input = Doc.EMPTY;
         comp.result = Doc.EMPTY;
-        tx.appendCompensation(comp);
-        tx.compensationLog(inst.id);
-        tx.markCompensated(inst.id, 1);
-        tx.cancelActiveTokens(other.id, now);
+        r.compensation().appendCompensation(comp);
+        r.compensation().compensationLog(inst.id);
+        r.compensation().markCompensated(inst.id, 1);
+        r.tokens().cancelActiveTokens(other.id, now);
 
         Rows.Schedule schedule = new Rows.Schedule();
         schedule.id = "sch-noscan";
@@ -293,84 +296,84 @@ class NoTableScanTest {
         schedule.intervalMillis = 60_000;
         schedule.nextFireAt = now;
         schedule.createdAt = now;
-        tx.putSchedule(schedule);
-        tx.schedules();
-        tx.scheduleByWorkflow(WF);
-        tx.dueSchedules(now, 10);
-        tx.claimSchedule(schedule.id, now, now + 60_000);
-        tx.deleteSchedule(schedule.id);
+        r.schedules().putSchedule(schedule);
+        r.schedules().schedules();
+        r.schedules().scheduleByWorkflow(WF);
+        r.schedules().dueSchedules(now, 10);
+        r.schedules().claimSchedule(schedule.id, now, now + 60_000);
+        r.schedules().deleteSchedule(schedule.id);
 
         Rows.ServerNode server = new Rows.ServerNode();
         server.id = "node-noscan";
         server.name = "noscan";
         server.firstHeartbeat = now;
         server.lastHeartbeat = now;
-        tx.upsertNode(server);
-        tx.setLeader(server.id, true);
-        tx.nodes();
-        tx.deleteNodesOlderThan(now - 60_000);
+        r.cluster().upsertNode(server);
+        r.cluster().setLeader(server.id, true);
+        r.cluster().nodes();
+        r.cluster().deleteNodesOlderThan(now - 60_000);
 
-        long seq = tx.appendEvent(new Rows.Event(0, inst.id, WF, 1, "corr", "STARTED", node, 1, "{}", now));
-        tx.createEventCursorIfAbsent(new Rows.EventCursor("c", 0, now, now));
-        tx.advanceEventCursor("c", seq, now);
-        tx.eventCursor("c");
-        tx.eventsAfter(0, 10);
-        tx.eventsAfter(0, now, 10);
-        tx.latestEventSeq();
-        tx.oldestAckedSeq();
-        tx.deleteEvents(now - 60_000, null, 10);
-        tx.deleteEvents(now - 60_000, seq, 10);
+        long seq = r.events().appendEvent(new Rows.Event(0, inst.id, WF, 1, "corr", "STARTED", node, 1, "{}", now));
+        r.events().createEventCursorIfAbsent(new Rows.EventCursor("c", 0, now, now));
+        r.events().advanceEventCursor("c", seq, now);
+        r.events().eventCursor("c");
+        r.events().eventsAfter(0, 10);
+        r.events().eventsAfter(0, now, 10);
+        r.events().latestEventSeq();
+        r.events().oldestAckedSeq();
+        r.events().deleteEvents(now - 60_000, null, 10);
+        r.events().deleteEvents(now - 60_000, seq, 10);
 
-        tx.putAuthRole(new Rows.AuthRole("noscan-role", Set.of("instances.read"), false, now, now));
-        tx.authRoles();
-        tx.putAuthUser(new Rows.AuthUser("noscan-user", "h", "s", 1, false, now, now));
-        tx.findAuthUser("noscan-user");
-        tx.authUsers();
-        tx.setAuthRolesOf("noscan-user", List.of("noscan-role"));
-        tx.authRolesOf("noscan-user");
-        tx.insertAuthCredential(new Rows.AuthCredential("cred-noscan", Rows.AuthCredential.API_KEY, "kh", null,
+        r.auth().putAuthRole(new Rows.AuthRole("noscan-role", Set.of("instances.read"), false, now, now));
+        r.auth().authRoles();
+        r.auth().putAuthUser(new Rows.AuthUser("noscan-user", "h", "s", 1, false, now, now));
+        r.auth().findAuthUser("noscan-user");
+        r.auth().authUsers();
+        r.auth().setAuthRolesOf("noscan-user", List.of("noscan-role"));
+        r.auth().authRolesOf("noscan-user");
+        r.auth().insertAuthCredential(new Rows.AuthCredential("cred-noscan", Rows.AuthCredential.API_KEY, "kh", null,
                 "noscan-role", now, null));
-        tx.authCredentials();
-        tx.findAuthCredentialByKeyHash("kh");
-        tx.findAuthCredentialBySubject("CN=noscan");
-        tx.insertAuthSession(new Rows.AuthSession("sess-noscan", "noscan-user", now + 60_000, now));
-        tx.findAuthSession("sess-noscan");
-        tx.deleteAuthSessionsOf("noscan-user", "keep");
-        tx.deleteExpiredAuthSessions(now, 10);
-        tx.deleteAuthSession("sess-noscan");
-        long audit = tx.appendAuthAudit(new Rows.AuthAudit(0, now, "noscan-user", "user.create", "noscan-user", null));
-        tx.authAuditAfter(audit - 1, 10);
-        tx.authAuditHead();
-        tx.authAuditHas("user.create");
-        tx.deleteAuthCredential("cred-noscan");
-        tx.deleteAuthUser("noscan-user");
-        tx.deleteAuthRole("noscan-role");
+        r.auth().authCredentials();
+        r.auth().findAuthCredentialByKeyHash("kh");
+        r.auth().findAuthCredentialBySubject("CN=noscan");
+        r.auth().insertAuthSession(new Rows.AuthSession("sess-noscan", "noscan-user", now + 60_000, now));
+        r.auth().findAuthSession("sess-noscan");
+        r.auth().deleteAuthSessionsOf("noscan-user", "keep");
+        r.auth().deleteExpiredAuthSessions(now, 10);
+        r.auth().deleteAuthSession("sess-noscan");
+        long audit = r.auth().appendAuthAudit(new Rows.AuthAudit(0, now, "noscan-user", "user.create", "noscan-user", null));
+        r.auth().authAuditAfter(audit - 1, 10);
+        r.auth().authAuditHead();
+        r.auth().authAuditHas("user.create");
+        r.auth().deleteAuthCredential("cred-noscan");
+        r.auth().deleteAuthUser("noscan-user");
+        r.auth().deleteAuthRole("noscan-role");
 
         Rows.SearchDoc doc = new Rows.SearchDoc(inst.id, WF, 1, "RUNNING", "corr", "order shipped", now, now);
-        tx.upsertSearchDoc(doc);
-        tx.searchDocs(new Rows.SearchQuery(null, null, null, null, null, 10));
-        tx.searchDocs(new Rows.SearchQuery("shipped", null, null, null, null, 10));
-        tx.searchDocs(new Rows.SearchQuery(null, names, "RUNNING", now - 60_000, now + 60_000, 10));
-        tx.searchDocs(new Rows.SearchQuery("shipped", prefixed, "RUNNING", now - 60_000, now + 60_000, 10));
-        tx.upsertSearchDoc(new Rows.SearchDoc(inst.id, WF, 1, "RUNNING", "corr", "order shipped", now, now,
+        r.search().upsertSearchDoc(doc);
+        r.search().searchDocs(new Rows.SearchQuery(null, null, null, null, null, 10));
+        r.search().searchDocs(new Rows.SearchQuery("shipped", null, null, null, null, 10));
+        r.search().searchDocs(new Rows.SearchQuery(null, names, "RUNNING", now - 60_000, now + 60_000, 10));
+        r.search().searchDocs(new Rows.SearchQuery("shipped", prefixed, "RUNNING", now - 60_000, now + 60_000, 10));
+        r.search().upsertSearchDoc(new Rows.SearchDoc(inst.id, WF, 1, "RUNNING", "corr", "order shipped", now, now,
                 Map.of("region", "EU", "total", 5L, "rate", new java.math.BigDecimal("0.5"), "vip", true)));
         Scope wf = Scope.of(WF);
-        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+        r.search().searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
                 new Rows.AttrFilter("region", Op.EQUAL, "EU"))));
-        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+        r.search().searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
                 new Rows.AttrFilter("total", Op.GREATER_THAN_OR_EQUAL, 5L))));
-        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+        r.search().searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
                 new Rows.AttrFilter("rate", Op.LESS_THAN, new java.math.BigDecimal("1")))));
-        tx.searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
+        r.search().searchDocs(new Rows.SearchQuery(null, wf, null, null, null, 10, List.of(
                 new Rows.AttrFilter("vip", Op.EQUAL, true))));
-        tx.searchDocs(new Rows.SearchQuery("shipped", wf, "RUNNING", now - 60_000, now + 60_000, 10, List.of(
+        r.search().searchDocs(new Rows.SearchQuery("shipped", wf, "RUNNING", now - 60_000, now + 60_000, 10, List.of(
                 new Rows.AttrFilter("region", Op.EQUAL, "EU"), new Rows.AttrFilter("total", Op.LESS_THAN, 9L))));
-        tx.searchDocsAfter("", 10);
-        tx.deleteSearchDocsBefore(now - 60_000, 10);
-        tx.deleteSearchDoc(inst.id);
+        r.search().searchDocsAfter("", 10);
+        r.search().deleteSearchDocsBefore(now - 60_000, 10);
+        r.search().deleteSearchDoc(inst.id);
 
-        tx.deleteTerminalInstancesBefore(now - 60_000, 10);
-        tx.deleteGraph(WF, 1);
+        r.instances().deleteTerminalInstancesBefore(now - 60_000, 10);
+        r.graph().deleteGraph(WF, 1);
     }
 
     private static Instance instance(String id, long now) {
@@ -401,19 +404,6 @@ class NoTableScanTest {
         t.createdAt = now;
         t.updatedAt = now;
         return t;
-    }
-
-    /** {@code tx}, adding the signature of each operation called on it to {@code called}. */
-    private static Tx recording(Tx tx, Set<String> called) {
-        return (Tx) Proxy.newProxyInstance(NoTableScanTest.class.getClassLoader(), new Class<?>[]{Tx.class},
-                (proxy, m, args) -> {
-                    called.add(signature(m));
-                    try {
-                        return m.invoke(tx, args);
-                    } catch (InvocationTargetException e) {
-                        throw e.getCause();
-                    }
-                });
     }
 
     private static String signature(Method m) {

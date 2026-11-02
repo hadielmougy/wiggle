@@ -138,11 +138,11 @@ public final class WorkflowEngine {
 
     public String start(String workflow, Integer version, Object context, String correlationId) {
         String id = idMinter.next();
-        return transactions.inTx(id, () -> buffered(() -> instances.start(id, workflow, version, context, correlationId, null)));
+        return transactions.forInstance(id, () -> buffered(() -> instances.start(id, workflow, version, context, correlationId, null)));
     }
 
     public void cancel(String instanceId, String reason) {
-        List<String> children = transactions.inTx(instanceId, () -> instances.cancel(instanceId, reason));
+        List<String> children = transactions.forInstance(instanceId, () -> instances.cancel(instanceId, reason));
         // Cancelling in separate transactions keeps lock ordering one-way (child -> parent only).
         for (String child : children) {
             try {
@@ -310,7 +310,7 @@ public final class WorkflowEngine {
     /** The same, for a caller that serves only the queues {@code queues} accepts (null: every queue). */
     public ReportOutcome report(Run run, Predicate<String> queues) {
         if (run.steps.isEmpty()) throw EngineException.badRequest("report requires at least one step");
-        return transactions.inTx(run.startTaskId, () -> buffered(() -> {
+        return transactions.forInstance(run.startTaskId, () -> buffered(() -> {
             LockedTask task = Tokens.lock(run.startTaskId);
             Tokens.requireQueue(task.token(), queues);
             ExecutionMode mode = definitions.executionMode(task.inst().workflow, task.inst().version);
@@ -615,7 +615,7 @@ public final class WorkflowEngine {
      * {@code payload} merges into the context and the flow advances down the signal's path.
      */
     public void signal(String instanceId, String name, Object payload) {
-        transactions.inTxVoid(instanceId, () -> bufferedVoid(() -> {
+        transactions.forInstance(instanceId, () -> bufferedVoid(() -> {
             Instance inst = Repositories.instances().lockInstance(instanceId).orElseThrow(() -> EngineException.notFound("instance"));
             Instances.requireRunning(inst);
             Token t = Repositories.tokens().awaitingSignal(instanceId, name)
@@ -661,7 +661,7 @@ public final class WorkflowEngine {
     /** Runs {@code action} once per token, each in its own transaction, isolating failures. */
     private int sweep(List<Token> due, String what, SweepAction action) {
         return sweeper.run(due, token -> what + " " + token.id, token -> {
-            transactions.inTxVoid(token.id, () -> bufferedVoid(() -> action.apply(token)));
+            transactions.forInstance(token.id, () -> bufferedVoid(() -> action.apply(token)));
             return true;
         });
     }
@@ -682,7 +682,7 @@ public final class WorkflowEngine {
     private void fireTimer(Token timer) {
         Instance inst = Repositories.instances().lockInstance(timer.instanceId).orElse(null);
         if (!sweepable(inst)) return;
-        Token t = Repositories.locks().findToken(timer.id).orElse(null);
+        Token t = Repositories.tokens().findToken(timer.id).orElse(null);
         if (t == null || t.status != TokenStatus.WAITING) return;
         long ts = System.currentTimeMillis();
         LazyGraph def = definitions.graph(t.workflow, t.version);
@@ -704,7 +704,7 @@ public final class WorkflowEngine {
     private void promoteRetry(Token parked) {
         Instance inst = Repositories.instances().lockInstance(parked.instanceId).orElse(null);
         if (inst == null || !inst.status.live()) return;
-        Token t = Repositories.locks().findToken(parked.id).orElse(null);
+        Token t = Repositories.tokens().findToken(parked.id).orElse(null);
         long ts = System.currentTimeMillis();
         if (t == null || t.status != TokenStatus.WAITING || t.kind == NodeKind.SLEEP || t.availableAt > ts) return;
         tokens.promote(t, ts);
@@ -722,7 +722,7 @@ public final class WorkflowEngine {
     private void escalateOrFailSignal(Token task) {
         Instance inst = Repositories.instances().lockInstance(task.instanceId).orElse(null);
         if (!sweepable(inst)) return;
-        Token t = Repositories.locks().findToken(task.id).orElse(null);
+        Token t = Repositories.tokens().findToken(task.id).orElse(null);
         if (t == null || t.status != TokenStatus.AWAITING) return;
         long ts = System.currentTimeMillis();
         if (t.availableAt <= 0 || t.availableAt > ts) return;   // deadline cleared or moved
@@ -761,7 +761,7 @@ public final class WorkflowEngine {
     private void reclaimOrphan(Token orphan) {
         Instance inst = Repositories.instances().lockInstance(orphan.instanceId).orElse(null);
         if (inst == null) return;
-        Token t = Repositories.locks().findToken(orphan.id).orElse(null);
+        Token t = Repositories.tokens().findToken(orphan.id).orElse(null);
         if (t == null || !t.hasExpiredLeaseAt(System.currentTimeMillis())) return;
         Node node = definitions.graph(t.workflow, t.version).node(t.nodeId);
         long ts = System.currentTimeMillis();
@@ -777,7 +777,7 @@ public final class WorkflowEngine {
 
     /** The same, for a caller that serves only the queues {@code queues} accepts (null: every queue). */
     public void fail(String taskId, String leaseOwner, String message, boolean retryable, Predicate<String> queues) {
-        transactions.inTxVoid(taskId, () -> bufferedVoid(() -> {
+        transactions.forInstance(taskId, () -> bufferedVoid(() -> {
             LockedTask locked = Tokens.lock(taskId);
             Instance inst = locked.inst();
             Token t = locked.token();

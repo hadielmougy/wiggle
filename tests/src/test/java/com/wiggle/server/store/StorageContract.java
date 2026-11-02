@@ -216,7 +216,7 @@ abstract class StorageContract {
     // -- WGL-STOR-002/003/084: the transaction is a unit, and an instance can be locked --
 
     @Test
-    @DisplayName("inTx returns the body's value, and its writes are visible to the next transaction")
+    @DisplayName("a transaction returns the body's value, and its writes are visible to the next transaction")
     void transactionsCommitAndReturn() {
         Instance i = instance(id("wf"));
         String returned = TestTx.inHome(storage, () -> {
@@ -228,7 +228,7 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("a transaction that throws keeps all of its writes or none, held back or not")
+    @DisplayName("a transaction that throws keeps none of its writes, held back or not")
     void bufferingAgreesWithRollback() {
         Instance i = instance(id("wf"));
         Token t = token(i, NodeKind.TASK, TokenStatus.READY, null);
@@ -238,12 +238,8 @@ abstract class StorageContract {
             Repositories.tokens().insertToken(t);
             throw new IllegalStateException("abandoning this transaction");
         }));
-        boolean instanceKept = TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).isPresent();
-        boolean tokenKept = TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).isPresent();
-        // A store that rolls back keeps neither; one that cannot keeps both, so it must not hold the
-        // token back (see Tx#bufferWrites). Losing only the held-back write is a state no execution makes.
-        assertEquals(instanceKept, tokenKept, "the instance was " + (instanceKept ? "" : "not ") + "kept, the token "
-                + (tokenKept ? "was" : "was not"));
+        assertFalse(TestTx.inHome(storage, () -> Repositories.instances().findInstance(i.id)).isPresent(), "the instance rolled back");
+        assertFalse(TestTx.inHome(storage, () -> Repositories.tokens().findToken(t.id)).isPresent(), "the held-back token was never written");
     }
 
     @Test

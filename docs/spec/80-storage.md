@@ -10,13 +10,16 @@ mechanics each dialect uses.
 ## 1. The storage SPI
 
 **WGL-STOR-001** (MUST) The engine MUST reach storage only through `Storage`: `migrate()`,
-`inTx(work)` and an optional `fingerprint()`.
+`inShard(shard, body)` and `readShard(shard, freshness, body)`, which hand the body the database's
+repositories (`WriteRepositories` and `ReadRepositories`, one repository per area), and an optional
+`fingerprint()`. It MUST open those transactions through `ShardTransactions`, which binds them to the
+calling thread, and call the repositories through `Repositories`.
 
-**WGL-STOR-002** (MUST) Every engine mutation MUST run inside `inTx`, and an implementation MUST make
-that unit atomic.
+**WGL-STOR-002** (MUST) Every engine mutation MUST run inside a write transaction, and an implementation
+MUST make that unit atomic.
 
-**WGL-STOR-003** (MUST) An implementation MUST honour `Tx.lockInstance` as a mutual-exclusion point for
-one workflow instance, held for the rest of the transaction.
+**WGL-STOR-003** (MUST) An implementation MUST honour `InstanceRepository.lockInstance` as a
+mutual-exclusion point for one workflow instance, held for the rest of the transaction.
 
 **WGL-STOR-004** *Withdrawn: the cell coordinator was removed ([chapter 85 §15](85-sharding.md#15-dropping-the-coordinator)).*
 
@@ -193,7 +196,7 @@ accumulated history measurably raises latency at the throughput ceiling.
 
 ## 8. Reads the engine needs
 
-**WGL-STOR-070** (MUST) `Tx` MUST provide, beyond the CRUD on instances and tokens: batched insert /
+**WGL-STOR-070** (MUST) The repositories MUST provide, beyond the CRUD on instances and tokens: batched insert /
 find / update of tokens; instances by correlation id (newest first); due timers; signal waits (oldest
 first) and those whose deadline passed; sub-workflow children of a parent token's instance; the
 schedule for a workflow and the schedules that are due; expired leases; a backlog snapshot for lag monitoring; the join-stack list at a barrier; the compensation
@@ -232,7 +235,7 @@ by the attempt). It MUST NOT replay anything else, and each replay MUST run on a
 connection. An interrupt MUST abandon the replay and surface the original failure, with the thread's
 interrupt flag restored.
 
-**WGL-STOR-084** (MUST) A transaction body MUST therefore be re-runnable against a fresh `Tx`: it may
+**WGL-STOR-084** (MUST) A transaction body MUST therefore be re-runnable in a fresh transaction: it may
 read, write and throw, but MUST NOT depend on in-process state it mutated on a previous attempt. Engine
 bodies satisfy this by re-reading the rows they work from.
 

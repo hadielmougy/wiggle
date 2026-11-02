@@ -5,7 +5,7 @@ import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -184,7 +184,7 @@ class HousekeeperTest {
     void tickSurvivesFailure() {
         Storage broken = new Storage() {
             @Override public void migrate() { }
-            @Override public <R> R inTx(Function<Tx, R> work) { throw new RuntimeException("storage down"); }
+            @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) { throw new RuntimeException("storage down"); }
             @Override public void close() { }
         };
         try (Storage healthy = PostgresStorageFactory.inMemory();

@@ -212,7 +212,7 @@ final class Tokens {
 
     /** The task's instance, locked, and the task as it stands under that lock. */
     static LockedTask lock(String taskId) {
-        return Repositories.locks().lockTask(taskId).orElseThrow(() -> Repositories.locks().findToken(taskId).isPresent()
+        return Repositories.locks().lockTask(taskId).orElseThrow(() -> Repositories.tokens().findToken(taskId).isPresent()
                 ? EngineException.notFound("instance") : EngineException.notFound("task"));
     }
 
@@ -230,11 +230,11 @@ final class Tokens {
      * caller limited to some {@code queues} reads it first, to check the task is on one of them.
      */
     static long extendLease(String taskId, String leaseOwner, long extraMillis, Predicate<String> queues) {
-        if (queues != null) requireQueue(Repositories.locks().findToken(taskId).orElseThrow(() -> EngineException.notFound("task")), queues);
+        if (queues != null) requireQueue(Repositories.tokens().findToken(taskId).orElseThrow(() -> EngineException.notFound("task")), queues);
         long now = System.currentTimeMillis();
         long until = now + extraMillis;
         if (Repositories.tokens().renewLease(taskId, leaseOwner, until, now)) return until;
-        Token t = Repositories.locks().findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
+        Token t = Repositories.tokens().findToken(taskId).orElseThrow(() -> EngineException.notFound("task"));
         requireLease(t, leaseOwner);
         TokenState.of(t.status).renewLease(t, until);
         throw EngineException.conflict("lease for task " + taskId + " changed while renewing it");

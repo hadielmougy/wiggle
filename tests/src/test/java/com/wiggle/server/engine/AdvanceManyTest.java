@@ -20,7 +20,7 @@ import com.wiggle.server.engine.WorkflowEngine.StepInput;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
 import com.wiggle.server.store.Storage;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -559,11 +559,11 @@ class AdvanceManyTest {
 
         @Override public void migrate() { delegate.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             if (seen.incrementAndGet() == failOnTx.get()) {
                 throw new IllegalStateException("simulated storage outage");
             }
-            return delegate.inTx(work);
+            return delegate.inShard(shard, work);
         }
 
         @Override public void close() { delegate.close(); }
@@ -574,9 +574,9 @@ class AdvanceManyTest {
 
         @Override public void migrate() { delegate.migrate(); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             transactions.incrementAndGet();
-            return delegate.inTx(work);
+            return delegate.inShard(shard, work);
         }
 
         @Override public void close() { delegate.close(); }

@@ -140,7 +140,7 @@ and be replayed one command per transaction, each fenced, so the broken command 
 the sweep actions of [§6](#6-sweeps) — MUST each be callable against a transaction the caller
 already holds, so an owner applies a batch without opening a nested transaction.
 
-**WGL-PART-035** (MAY) Inside a fenced owner transaction, `Tx.lockInstance` MAY read the instance
+**WGL-PART-035** (MAY) Inside a fenced owner transaction, `InstanceRepository.lockInstance` MAY read the instance
 without a row lock ([§8](#8-the-spike), variant C2). It MUST keep the row lock on the legacy path.
 
 ## 5. Routing
@@ -222,7 +222,7 @@ with the leader: they start new instances or delete finished ones, and neither n
 1. Partitioned ids and the migration (`wf_partition_owner`, `wf_token.partition`,
    `wf_node.address`, `P` on the home shard).
 2. Ownership assignment, leases and the fence.
-3. Engine write entry points that take an open `Tx`.
+3. Engine write entry points that run in a transaction the caller holds.
 4. Mailboxes and batches.
 5. Routing in `ControlPlaneApi`.
 6. Sweeps per partition.

@@ -7,7 +7,7 @@ import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.Rows.Instance;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.CurrentTx;
-import com.wiggle.server.store.ReadTx;
+import com.wiggle.server.store.ReadRepositories;
 import com.wiggle.server.store.Repositories;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
@@ -49,7 +49,7 @@ class WakeOnProduceTest {
             Node node = Node.task("one", "one", "one", QUEUE, null);
 
             DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
-            transactions.inTxVoid("wfi_1", () -> {
+            transactions.forInstance("wfi_1", () -> {
                 long now = 1_000L;
                 Instance inst = Instances.create("wfi_1", "w", 1, Map.of(), null, null, now);
                 Token t = Tokens.create(inst, "one", "", null, now);
@@ -77,9 +77,9 @@ class WakeOnProduceTest {
             Transactions transactions = new Transactions(storage, notifier);
 
             DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
-            transactions.inTxVoid("wfi_1", () -> {
-                ReadTx outer = CurrentTx.require();
-                transactions.inTxVoid("wfi_1", () -> {
+            transactions.forInstance("wfi_1", () -> {
+                ReadRepositories outer = CurrentTx.require();
+                transactions.forInstance("wfi_1", () -> {
                     assertSame(outer, CurrentTx.require(), "the nested scope runs in the outer transaction");
                     transactions.wake(QUEUE, null, null);
                 });
@@ -103,11 +103,11 @@ class WakeOnProduceTest {
             Transactions transactions = new Transactions(storage, notifier);
 
             IllegalStateException nested = assertThrows(IllegalStateException.class,
-                    () -> transactions.inTxVoid("wfi.s7.01k6abc", () -> transactions.inHome(() -> null)));
+                    () -> transactions.forInstance("wfi.s7.01k6abc", () -> transactions.inHome(() -> null)));
             assertTrue(nested.getMessage().contains("would commit on its own"), nested.getMessage());
 
             DispatchNotifier.Watch watch = notifier.watch(QUEUE_FILTER, 1, FALLBACK.schedule("w", QUEUE_FILTER));
-            transactions.inTxVoid("wfi.s7.01k6abc", () -> transactions.wake(QUEUE, null, null));
+            transactions.forInstance("wfi.s7.01k6abc", () -> transactions.wake(QUEUE, null, null));
             assertTrue(watch.await(System.currentTimeMillis()),
                     "the refused scope must not have left this thread's state stuck");
         }

@@ -12,7 +12,7 @@ import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.DisplayName;
@@ -93,9 +93,12 @@ class JdbcTransactionsTest {
     void nestedTransactionIsIndependent() {
         try (HikariDataSource ds = pool("nested"); JdbcStorage storage = store(ds)) {
             RuntimeException outerFailure = new IllegalStateException("outer fails");
-            RuntimeException thrown = assertThrows(RuntimeException.class, () -> storage.inTxVoid(outer -> {
-                outer.putDefinition("outer", 1, "{}", "fp", "sha-256");
-                storage.inTxVoid(inner -> inner.putDefinition("inner", 1, "{}", "fp", "sha-256"));
+            RuntimeException thrown = assertThrows(RuntimeException.class, () -> storage.inShard(0, outer -> {
+                outer.graph().putDefinition("outer", 1, "{}", "fp", "sha-256");
+                storage.inShard(0, inner -> {
+                    inner.graph().putDefinition("inner", 1, "{}", "fp", "sha-256");
+                    return null;
+                });
                 throw outerFailure;
             }));
             assertEquals(outerFailure, thrown);
@@ -104,11 +107,11 @@ class JdbcTransactionsTest {
         }
     }
 
-    @Test @DisplayName("store operations run only inside a transaction: a Tx kept past its transaction refuses to run")
+    @Test @DisplayName("store operations run only inside a transaction: repositories kept past theirs refuse to run")
     void operationsNeedATransaction() {
         try (HikariDataSource ds = pool("escaped"); JdbcStorage storage = store(ds)) {
-            Tx escaped = storage.inTx(tx -> tx);
-            IllegalStateException e = assertThrows(IllegalStateException.class, () -> escaped.definition("x", 1));
+            WriteRepositories escaped = storage.inShard(0, r -> r);
+            IllegalStateException e = assertThrows(IllegalStateException.class, () -> escaped.graph().definition("x", 1));
             assertTrue(e.getMessage().contains("no transaction"), e.getMessage());
         }
     }

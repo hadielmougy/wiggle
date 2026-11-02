@@ -6,7 +6,7 @@ import java.util.Optional;
 
 /**
  * Persistence for workflow definitions and their compiled graphs -- the engine's immutable
- * <em>reference data</em>, as distinct from the mutable runtime state served by {@link Tx}
+ * <em>reference data</em>, as distinct from the mutable runtime state in the other repositories
  * (instances, tokens, leases, schedules, cluster nodes).
  *
  * <p>A published {@code (name, version)} is write-once: the registry refuses to redefine one whose
@@ -21,9 +21,8 @@ import java.util.Optional;
  *       advance a single token.</li>
  * </ul>
  *
- * <p>{@link Tx} extends this interface so one transaction can span graph reads and runtime writes,
- * but a consumer that only walks the graph (e.g. the lazy graph view, the definition registry)
- * should depend on this narrower type -- it states, in the type, that it cannot touch runtime state.
+ * <p>A consumer that only walks the graph (e.g. the lazy graph view, the definition registry) should
+ * depend on {@link GraphReads} -- it states, in the type, that it cannot write.
  */
 public interface GraphStore extends GraphReads {
 

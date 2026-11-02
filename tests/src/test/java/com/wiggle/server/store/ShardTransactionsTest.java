@@ -33,7 +33,7 @@ class ShardTransactionsTest {
         try (JdbcStorage seven = PostgresStorageFactory.inMemory(); JdbcStorage two = PostgresStorageFactory.inMemory()) {
             ShardTransactions shards = new ShardTransactions(new ShardedStorage(Map.of(7, seven, 2, two), 2));
             shards.forInstance(ON_SEVEN, () -> {
-                ReadTx outer = CurrentTx.require();
+                ReadRepositories outer = CurrentTx.require();
                 shards.read(7, () -> assertSame(outer, CurrentTx.require(), "same shard: the outer transaction"));
                 shards.readHome(() -> assertNotSame(outer, CurrentTx.require(), "another shard: one of its own"));
                 assertSame(outer, CurrentTx.require(), "the outer transaction is bound again afterwards");
@@ -46,7 +46,7 @@ class ShardTransactionsTest {
         try (JdbcStorage seven = PostgresStorageFactory.inMemory(); JdbcStorage two = PostgresStorageFactory.inMemory()) {
             ShardTransactions shards = new ShardTransactions(new ShardedStorage(Map.of(7, seven, 2, two), 2));
             shards.forInstance(ON_SEVEN, () -> {
-                ReadTx outer = CurrentTx.require();
+                ReadRepositories outer = CurrentTx.require();
                 shards.inShard(7, () -> assertSame(outer, CurrentTx.require()));
                 IllegalStateException e = assertThrows(IllegalStateException.class, () -> shards.inHome(() -> { }));
                 assertTrue(e.getMessage().contains("would commit on its own"), e.getMessage());

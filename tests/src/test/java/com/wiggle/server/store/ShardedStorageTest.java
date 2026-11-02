@@ -40,7 +40,7 @@ class ShardedStorageTest {
         Probe(String fingerprint) { this.fingerprint = fingerprint; }
 
         @Override public void migrate() { migrated = true; }
-        @Override public <R> R inTx(Function<Tx, R> work) { txs.incrementAndGet(); return mem.inTx(work); }
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) { txs.incrementAndGet(); return mem.inShard(shard, work); }
         @Override public String fingerprint() { return fingerprint; }
         @Override public void close() { closed = true; mem.close(); }
     }
@@ -51,12 +51,12 @@ class ShardedStorageTest {
 
         Outageable(String fingerprint) { super(fingerprint); }
 
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             if (unreachable) {
                 txs.incrementAndGet();
                 throw new StorageUnreachableException("connection refused", null);
             }
-            return super.inTx(work);
+            return super.inShard(shard, work);
         }
     }
 
@@ -102,13 +102,6 @@ class ShardedStorageTest {
         assertEquals(2, new ShardedStorage(shards(new Probe("a"), new Probe("b")), 2).auth());
         assertThrows(IllegalArgumentException.class, () -> new ShardedStorage(
                 List.of(new ShardedStorage.Member(2, ShardState.ACTIVE, true, new Probe("b"))), 2, 9));
-    }
-
-    @Test @DisplayName("an unrouted transaction is refused")
-    void unroutedIsRefused() {
-        ShardedStorage s = new ShardedStorage(shards(new Probe("a"), new Probe("b")), 2);
-        IllegalStateException e = assertThrows(IllegalStateException.class, () -> s.inTx(tx -> null));
-        assertTrue(e.getMessage().contains("unrouted"), e.getMessage());
     }
 
     @Test @DisplayName("a shard this node does not know is a transient failure, never 'not found'")

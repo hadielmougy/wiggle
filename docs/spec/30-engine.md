@@ -19,7 +19,7 @@ token rows marking where execution is on the compiled graph.
 so there is no determinism discipline imposed on handlers.
 
 **WGL-ENG-003** (MUST) Every mutation for one instance MUST be serialised by an instance write-lock
-held for the remainder of its transaction (`Tx.lockInstance`), which is what lets several server
+held for the remainder of its transaction (`InstanceRepository.lockInstance`), which is what lets several server
 nodes drive the same instance concurrently.
 
 **WGL-ENG-004** (MUST) A state **answers** and a lifecycle **writes**: `InstanceState` and

@@ -9,7 +9,7 @@ import com.wiggle.server.store.ShardTransactions;
 import com.wiggle.server.store.ShardedStorage;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
-import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteRepositories;
 import com.wiggle.tests.TestTx;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,9 +34,9 @@ class SearchIndexTest {
         volatile boolean down;
 
         @Override public void migrate() { }
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             if (down) throw new StorageException("search shard down", null, StorageException.Classification.TRANSIENT);
-            return mem.inTx(work);
+            return mem.inShard(shard, work);
         }
         @Override public void close() { }
 
@@ -129,7 +129,7 @@ class SearchIndexTest {
         assertThrows(StorageException.class, () -> index.search(query("pear"), false));
         SearchIndex.Result r = index.search(query("pear"), true);
         assertTrue(r.partial());
-        assertEquals(30 - shards.get(2).mem.inTx(tx -> tx.searchDocsAfter("", 1000)).size(), r.hits().size());
+        assertEquals(30 - TestTx.inHome(shards.get(2).mem, () -> Repositories.search().searchDocsAfter("", 1000)).size(), r.hits().size());
     }
 
     @Test @DisplayName("after a search shard is drained, the rebalance moves its documents to their new shard")

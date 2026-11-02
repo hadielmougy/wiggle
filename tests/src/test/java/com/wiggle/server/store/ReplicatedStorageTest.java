@@ -33,9 +33,9 @@ class ReplicatedStorageTest {
         volatile boolean broken;
 
         @Override public void migrate() { }
-        @Override public <R> R inTx(Function<Tx, R> work) {
+        @Override public <R> R inShard(int shard, Function<WriteRepositories, R> work) {
             if (broken) throw new StorageException("replica down", null, StorageException.Classification.TRANSIENT);
-            return mem.inTx(work);
+            return mem.inShard(shard, work);
         }
         @Override public void close() { }
     }
