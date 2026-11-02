@@ -226,20 +226,22 @@ abstract class StorageContract {
     }
 
     @Test
-    @DisplayName("a transaction that throws rolls back exactly as far as the store declares it can")
-    void rollbackMatchesTheDeclaredTransactionality() {
+    @DisplayName("a transaction that throws keeps all of its writes or none, held back or not")
+    void bufferingAgreesWithRollback() {
         Instance i = instance(id("wf"));
+        Token t = token(i, NodeKind.TASK, TokenStatus.READY, null);
         assertThrows(IllegalStateException.class, () -> storage.inTxVoid(tx -> {
             tx.insertInstance(i);
+            tx.bufferWrites();
+            tx.insertToken(t);
             throw new IllegalStateException("abandoning this transaction");
         }));
-        boolean transactional = storage.inTx(Tx::transactional);
-        boolean kept = storage.inTx(tx -> tx.findInstance(i.id)).isPresent();
-        // Both answers are contractual; what is not allowed is a store whose declaration and its
-        // behaviour disagree, because write-buffering keys off the declaration (see Tx#transactional).
-        assertEquals(transactional, !kept, transactional
-                ? "a store that declares itself transactional discards the writes of a throw"
-                : "a store that declares it cannot roll back must leave the writes it already applied");
+        boolean instanceKept = storage.inTx(tx -> tx.findInstance(i.id)).isPresent();
+        boolean tokenKept = storage.inTx(tx -> tx.findToken(t.id)).isPresent();
+        // A store that rolls back keeps neither; one that cannot keeps both, so it must not hold the
+        // token back (see Tx#bufferWrites). Losing only the held-back write is a state no execution makes.
+        assertEquals(instanceKept, tokenKept, "the instance was " + (instanceKept ? "" : "not ") + "kept, the token "
+                + (tokenKept ? "was" : "was not"));
     }
 
     @Test

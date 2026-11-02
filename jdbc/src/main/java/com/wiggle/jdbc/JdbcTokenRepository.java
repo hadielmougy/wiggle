@@ -7,6 +7,7 @@ import com.wiggle.server.store.PayloadCodec;
 import com.wiggle.server.store.Rows;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.server.store.TokenRepository;
+import com.wiggle.server.store.WriteBuffer;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.SqlParameterSource;
 
@@ -54,6 +55,11 @@ final class JdbcTokenRepository extends JdbcRepository implements TokenRepositor
     }
 
     @Override public void insertToken(Token t) {
+        WriteBuffer held = owner.buffer();
+        if (held != null) {
+            held.insertToken(t);
+            return;
+        }
         jdbc().update(INSERT_TOKEN, tokenRow(t));
         writeAttributes(List.of(t), false);
         owner.recorded(t);
@@ -162,6 +168,11 @@ final class JdbcTokenRepository extends JdbcRepository implements TokenRepositor
     }
 
     @Override public void updateToken(Token t) {
+        WriteBuffer held = owner.buffer();
+        if (held != null) {
+            held.updateToken(t);
+            return;
+        }
         boolean keep = payloadUnchanged(t);
         jdbc().update(keep ? UPDATE_TOKEN_KEEP_PAYLOAD : UPDATE_TOKEN, tokenUpdate(t, keep));
         writeAttributes(List.of(t), true);

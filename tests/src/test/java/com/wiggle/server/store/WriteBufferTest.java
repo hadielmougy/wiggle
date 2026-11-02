@@ -11,13 +11,16 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /** What reaches the store when the buffer flushes: each token once, in its final state, newest write last. */
-class BufferedTxTest {
+class WriteBufferTest {
 
     /** Records the writes a flush sends, as "op id status". */
     private final List<String> writes = new ArrayList<>();
 
-    private BufferedTx buffered() {
-        Tx recorder = (Tx) Proxy.newProxyInstance(Tx.class.getClassLoader(), new Class<?>[] {Tx.class},
+    private final WriteBuffer tx = new WriteBuffer();
+
+    /** A repository of {@code type} that records the bulk writes a flush sends. */
+    private <T> T recorder(Class<T> type) {
+        return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[] {type},
                 (proxy, method, args) -> {
                     switch (method.getName()) {
                         case "insertTokens" -> ((List<?>) args[0]).forEach(t -> writes.add("insert " + line((Rows.Token) t)));
@@ -26,8 +29,11 @@ class BufferedTxTest {
                         default -> { }
                     }
                     return null;
-                });
-        return BufferedTx.of(recorder);
+                }));
+    }
+
+    private void flush() {
+        tx.flushTo(recorder(TokenRepository.class), recorder(InstanceRepository.class));
     }
 
     private static String line(Rows.Token t) {
@@ -43,36 +49,33 @@ class BufferedTxTest {
 
     @Test @DisplayName("a token inserted and then moved on in the same transaction is one insert, in its final state")
     void insertThenUpdate() {
-        BufferedTx tx = buffered();
         Rows.Token next = token("tok-1", TokenStatus.WAITING);
         tx.insertToken(next);
         next.status = TokenStatus.READY;
         tx.updateToken(next);
-        tx.flush();
+        flush();
         assertEquals(List.of("insert tok-1 READY"), writes);
     }
 
     @Test @DisplayName("a token updated twice is written once, with its last state")
     void updateTwice() {
-        BufferedTx tx = buffered();
         Rows.Token t = token("tok-1", TokenStatus.RUNNING);
         tx.updateToken(t);
         t.status = TokenStatus.DONE;
         tx.updateToken(t);
-        tx.flush();
+        flush();
         assertEquals(List.of("update tok-1 DONE"), writes);
     }
 
     @Test @DisplayName("two rows of one token: whichever was written last is written last")
     void twoRowsOfOneToken() {
-        BufferedTx tx = buffered();
         Rows.Token a = token("tok-1", TokenStatus.RUNNING);
         Rows.Token b = token("tok-1", TokenStatus.WAITING);
         tx.updateToken(a);
         tx.updateToken(b);
         a.status = TokenStatus.DONE;
         tx.updateToken(a);
-        tx.flush();
+        flush();
         assertEquals(List.of("update tok-1 WAITING", "update tok-1 DONE"), writes);
 
         writes.clear();
@@ -82,27 +85,18 @@ class BufferedTxTest {
         tx.updateToken(other);
         inserted.status = TokenStatus.DONE;
         tx.updateToken(inserted);
-        tx.flush();
+        flush();
         assertEquals(List.of("insert tok-2 DONE", "update tok-2 RUNNING", "update tok-2 DONE"), writes,
                 "the insert cannot carry an update made after another row of the same token was written");
     }
 
     @Test @DisplayName("instance updates are never folded: each advances the row's revision")
     void instanceUpdatesKept() {
-        BufferedTx tx = buffered();
         Rows.Instance i = new Rows.Instance();
         i.id = "wfi-1";
         tx.updateInstance(i);
         tx.updateInstance(i);
-        tx.flush();
+        flush();
         assertEquals(List.of("instance wfi-1", "instance wfi-1"), writes);
-    }
-
-    @Test @DisplayName("any other call flushes first, so it sees every write made before it")
-    void readsFlush() {
-        BufferedTx tx = buffered();
-        tx.insertToken(token("tok-1", TokenStatus.READY));
-        tx.findToken("tok-1");
-        assertEquals(List.of("insert tok-1 READY"), writes);
     }
 }

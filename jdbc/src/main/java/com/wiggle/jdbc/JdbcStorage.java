@@ -12,6 +12,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionSystemException;
 import org.springframework.transaction.support.ResourceHolderSupport;
 import org.springframework.transaction.support.ResourceHolderSynchronization;
+import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.wiggle.core.*;
@@ -27,6 +28,7 @@ import com.wiggle.server.store.StorageException;
 import com.wiggle.server.store.StorageException.Classification;
 import com.wiggle.server.store.StorageUnreachableException;
 import com.wiggle.server.store.Tx;
+import com.wiggle.server.store.WriteBuffer;
 
 import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
@@ -1043,8 +1045,43 @@ public final class JdbcStorage implements Storage {
 
     Dialect dialect() { return dialect; }
 
-    /** The transaction open on this store, as a Spring transaction resource: its identity, for the token stamps. */
+    /**
+     * The transaction open on this store, as a Spring transaction resource: its identity, for the
+     * token stamps, and the writes it holds back once {@link #bufferWrites} is asked for.
+     */
     private static final class TxScope extends ResourceHolderSupport {
+        WriteBuffer buffer;
+        boolean flushing;
+    }
+
+    /** Holds the current transaction's token and instance writes back until it commits; see {@link WriteBuffer}. */
+    void bufferWrites() {
+        TxScope scope = scope();
+        if (scope.buffer != null) return;
+        scope.buffer = new WriteBuffer();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void beforeCommit(boolean readOnly) {
+                flushPending();
+            }
+        });
+    }
+
+    /** The current transaction's write buffer, or null when its writes are not held back. */
+    WriteBuffer buffer() {
+        TxScope scope = scope();
+        return scope.flushing ? null : scope.buffer;
+    }
+
+    /** Writes what the current transaction holds back, before any other statement of it runs and before it commits. */
+    void flushPending() {
+        if (!(TransactionSynchronizationManager.getResource(this) instanceof TxScope scope)) return;
+        if (scope.buffer == null || scope.flushing || scope.buffer.isEmpty()) return;
+        scope.flushing = true;
+        try {
+            scope.buffer.flushTo(tx.tokens(), tx.instances());
+        } finally {
+            scope.flushing = false;
+        }
     }
 
     /** A transient statement failure, re-raised as a {@link StorageException} the replay above can
@@ -1185,6 +1222,7 @@ public final class JdbcStorage implements Storage {
      */
     private static final class JdbcTx implements Tx {
         private final Dialect dialect;
+        private final JdbcStorage owner;
         private final JdbcShardRepository shards;
         private final JdbcClusterRepository cluster;
         private final JdbcScheduleRepository schedules;
@@ -1199,6 +1237,7 @@ public final class JdbcStorage implements Storage {
 
         JdbcTx(Dialect dialect, JdbcStorage owner) {
             this.dialect = dialect;
+            this.owner = owner;
             this.shards = new JdbcShardRepository(owner);
             this.cluster = new JdbcClusterRepository(owner);
             this.schedules = new JdbcScheduleRepository(owner);
@@ -1413,6 +1452,12 @@ public final class JdbcStorage implements Storage {
         @Override public OptionalInt shardIdentity() { return shards.shardIdentity(); }
         @Override public OptionalLong shardBeat() { return shards.shardBeat(); }
         @Override public List<Rows.ShardRecord> shardRegistry() { return shards.shardRegistry(); }
+
+        @Override public void bufferWrites() { owner.bufferWrites(); }
+
+        JdbcTokenRepository tokens() { return tokens; }
+
+        JdbcInstanceRepository instances() { return instances; }
 
         @Override public Optional<Rows.LockedTask> lockTask(String tokenId) {
             return dialect.supportsJoinedLock() ? instances.lockTask(tokenId) : Tx.super.lockTask(tokenId);
