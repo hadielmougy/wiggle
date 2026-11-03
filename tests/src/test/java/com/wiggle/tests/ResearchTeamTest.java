@@ -4,15 +4,14 @@ import com.wiggle.agents.AgentsDemo;
 import com.wiggle.agents.Model;
 import com.wiggle.agents.ResearchTeam;
 import com.wiggle.agents.ScriptedModel;
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,7 +42,7 @@ class ResearchTeamTest {
     private static <T> T withTeam(Model model, Duration approvalTimeout,
                                   BiFunction<WiggleClient, String, T> body) throws Exception {
         FlowSpec spec = ResearchTeam.spec(approvalTimeout);
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(spec);
             try (Worker worker = new Worker(client, "agents-" + Ids.next("x"))

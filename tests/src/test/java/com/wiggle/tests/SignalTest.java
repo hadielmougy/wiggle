@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
@@ -7,9 +8,7 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
@@ -78,7 +77,7 @@ class SignalTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, dashboardPort);
     }
 
-    private static List<Token> awaitPending(WiggleServer server, int expected) throws InterruptedException {
+    private static List<Token> awaitPending(WiggleTestServer server, int expected) throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         while (System.nanoTime() < deadline) {
             List<Token> p = server.engine().pendingSignals(50);
@@ -94,7 +93,7 @@ class SignalTest {
                 .thenAwait("approval")
                 .thenApply(s::after));
 
-        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w").registerHandler(new ApproveH())) {
             client.register(bp);
@@ -121,7 +120,7 @@ class SignalTest {
         FlowSpec bp = FlowSpec.define("sig-wrong", 1, Map.class, AfterStep.class, (f, s) -> f
                 .thenAwait("expected")
                 .thenApply(s::after));
-        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w2").registerHandler(new WrongH())) {
             client.register(bp);
@@ -142,7 +141,7 @@ class SignalTest {
                 .thenAwait("approval", Duration.ofMillis(250), b -> b.thenApply(s::escalate))
                 .thenApply(s::after));
 
-        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w3").registerHandler(new EscalateH())) {
             client.register(bp);
@@ -163,7 +162,7 @@ class SignalTest {
                 .thenAwait("approval", Duration.ofMillis(250))
                 .thenApply(s::after));
 
-        try (WiggleServer server = new WiggleServer(config(0), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "sig-w4").registerHandler(new TimeoutH())) {
             client.register(bp);

@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
@@ -10,7 +11,6 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -93,7 +93,7 @@ class JdbcForkJoinStressTest {
         String url = "jdbc:h2:mem:stress-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
         FlowSpec bp = flowSpec();
 
-        List<WiggleServer> servers = new ArrayList<>();
+        List<WiggleTestServer> servers = new ArrayList<>();
         List<WiggleClient> clients = new ArrayList<>();
         List<Worker> workers = new ArrayList<>();
         try {
@@ -101,7 +101,7 @@ class JdbcForkJoinStressTest {
                 ServerConfig config = new ServerConfig(TestPorts.free(), "node-" + i, url, "sa", "", 8,
                         Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                         Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-                WiggleServer server = new WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
+                WiggleTestServer server = WiggleTestServer.start(config);
                 servers.add(server);
                 WiggleClient client = new WiggleClient(server.baseUrl());
                 clients.add(client);
@@ -128,7 +128,7 @@ class JdbcForkJoinStressTest {
         } finally {
             for (Worker w : workers) w.close();
             for (WiggleClient c : clients) c.close();
-            for (WiggleServer s : servers) s.close();
+            for (WiggleTestServer s : servers) s.close();
         }
     }
 }

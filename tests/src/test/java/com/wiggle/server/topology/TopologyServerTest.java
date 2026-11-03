@@ -1,10 +1,9 @@
 package com.wiggle.server.topology;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.ServerNode;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
@@ -45,7 +44,7 @@ class TopologyServerTest {
 
     @Test @DisplayName("an id on a retired shard is NOT_FOUND over the API")
     void aRetiredShardIsNotFound() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(topology()), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(topology()));
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             WiggleApiException e = assertThrows(WiggleApiException.class, () -> client.instance("wfi.s2.01k6abc"));
             assertEquals(404, e.status(), e.getMessage());
@@ -54,7 +53,7 @@ class TopologyServerTest {
 
     @Test @DisplayName("a node publishes the newest generation it has loaded, not just the one in force")
     void aNodePublishesItsGeneration() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(topology()), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(topology()))) {
             long deadline = System.currentTimeMillis() + 5_000;
             List<ServerNode> nodes = server.cluster().members();
             while (nodes.isEmpty() && System.currentTimeMillis() < deadline) {

@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
@@ -10,7 +11,6 @@ import com.wiggle.core.InstanceView;
 import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -89,7 +89,7 @@ class BacklogCoverageTest {
     @Test
     @DisplayName("a queue nobody polls shows as uncovered, with what is stranded on it")
     void aQueueNobodyPollsIsReportedUncovered() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, QUEUES_WF);
@@ -128,7 +128,7 @@ class BacklogCoverageTest {
     @DisplayName("WGL-QC-081: a slice polled only through criteria is conditional, with what they match counted")
     void criteriaMakeASliceConditional() throws Exception {
         String wf = "bc-cond-" + Ids.next("x");
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             FlowSpec spec = FlowSpec.define(wf, 1, Map.class, OneStep.class, (f, s) -> f
                     .attribute("region", com.wiggle.core.criteria.AttrType.STRING, "region")
@@ -158,7 +158,7 @@ class BacklogCoverageTest {
     @Test
     @DisplayName("a version every worker scoped out of is uncovered; starting its worker covers it")
     void anUnservedVersionIsReportedUncovered() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, VERSION_WF);
@@ -204,7 +204,7 @@ class BacklogCoverageTest {
     @Test
     @DisplayName("an unscoped worker covers every version of the workflow it binds")
     void anUnscopedWorkerCoversEveryVersion() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             clear(client, UNSCOPED_WF);

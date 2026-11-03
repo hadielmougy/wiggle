@@ -1,10 +1,10 @@
 package com.wiggle.postgres;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.ShardIds;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.topology.Topology;
 import com.wiggle.server.topology.TopologyParser;
 import com.wiggle.testfixtures.TestPorts;
@@ -93,7 +93,7 @@ class PostgresTopologyTest {
         FlowSpec flow = FlowSpec.define("pg-topo", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
 
         Map<Integer, Integer> minted = new HashMap<>();
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(flow);
             for (int i = 0; i < 6; i++) minted.merge(ShardIds.shardOf(client.start(flow, Map.of())).getAsInt(), 1, Integer::sum);
@@ -136,7 +136,7 @@ class PostgresTopologyTest {
         ServerConfig config = new ServerConfig(TestPorts.free(), "pg-auth", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config)) {
             server.accounts().create(null, "dana", "dana-password", List.of("admin"), java.util.Set.of(), true);
             server.accounts().openSession("dana", 60_000);
             assertEquals(true, server.accounts().account("dana").orElseThrow().passwordMatches("dana-password"));
@@ -171,7 +171,7 @@ class PostgresTopologyTest {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
         FlowSpec flow = FlowSpec.define("pg-search", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(flow);
             String ada = client.start("pg-search", Map.of("customer", "Ada Lovelace"), null, null);

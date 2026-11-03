@@ -1,13 +1,12 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,7 +45,7 @@ class FindByCorrelationTest {
     }
 
     private void run(String jdbcUrl) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(jdbcUrl));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "corr-w").registerHandler(new H())) {
             client.register(wf());

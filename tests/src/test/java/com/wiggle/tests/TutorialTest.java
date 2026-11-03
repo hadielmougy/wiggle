@@ -1,14 +1,13 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import com.wiggle.tutorial.OrderHandlers;
 import com.wiggle.tutorial.Orders;
@@ -67,7 +66,7 @@ class TutorialTest {
     @Test @DisplayName("tutorial 1 -- server embedded in the app's own JVM, on a database")
     void embedded() throws Exception {
         FlowSpec orders = Orders.spec();
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             client.register(orders);   // before the worker binds, exactly as the page says
@@ -83,7 +82,7 @@ class TutorialTest {
     @Test @DisplayName("tutorial 2 -- a separate server process; submitter and worker are clients")
     void standalone() throws Exception {
         // stands in for the container the page runs: same client code either way
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config())) {
 
             String id;
             try (WiggleClient submitter = new WiggleClient(server.baseUrl())) {
@@ -108,7 +107,7 @@ class TutorialTest {
             tooMany[i] = new Orders.Item("SKU-" + i, BigDecimal.ONE);
         }
         FlowSpec orders = Orders.spec();
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             client.register(orders);

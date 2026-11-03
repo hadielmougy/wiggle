@@ -1,14 +1,13 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Json;
 import com.wiggle.core.WorkflowDefinition;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.H2Dialect;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,7 +50,7 @@ class ObservedRemovalTest {
         ServerConfig config = new ServerConfig(TestPorts.free(), "obs-gone", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config)) {
             // an older client's register call, with the mode as it would send it
             Map<String, Object> json = spec().definition().toJson();
             json.put("executionMode", "OBSERVED");

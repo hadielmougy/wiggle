@@ -1,11 +1,10 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Ids;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -51,7 +50,7 @@ class ServerShutdownTest {
     void closeTerminatesEvenWithAnInFlightLongPoll() throws Exception {
         FlowSpec spec = FlowSpec.define("shutdown-" + Ids.next("wf"), 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-        WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        WiggleTestServer server = WiggleTestServer.start(config());
         int port = server.port();
         WiggleClient client = new WiggleClient(server.baseUrl());
         client.register(spec);
