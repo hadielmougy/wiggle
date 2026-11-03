@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
@@ -7,9 +8,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -80,14 +79,14 @@ class SettleOutageTest {
         System.clearProperty("wiggle.rpc.retryDelayMillis");
     }
 
-    private WiggleServer startServer() throws java.io.IOException {
+    private WiggleTestServer startServer() throws java.io.IOException {
         return startServer(Duration.ofSeconds(20));
     }
 
-    private WiggleServer startServer(Duration defaultLease) throws java.io.IOException {
-        return new WiggleServer(new ServerConfig(port, "settle-outage", jdbcUrl, "sa", "", 4,
+    private WiggleTestServer startServer(Duration defaultLease) throws java.io.IOException {
+        return WiggleTestServer.start(new ServerConfig(port, "settle-outage", jdbcUrl, "sa", "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, defaultLease,
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0), new WiggleStorageFactory()).start();
+                Duration.ofMillis(500), Duration.ofHours(1), 100, 0));
     }
 
     private static FlowSpec flow(String name, String mode) {
@@ -105,7 +104,7 @@ class SettleOutageTest {
         String name = "settle-outage-" + mode.toLowerCase();
         FlowSpec spec = flow(name, mode);
         H h = new H();
-        WiggleServer server = startServer();
+        WiggleTestServer server = startServer();
         try (WiggleClient client = new WiggleClient("localhost:" + port);
              Worker worker = new Worker(client, "w-" + Ids.next("x"),
                      WorkerOptions.defaults().withLease(Duration.ofSeconds(20)))
@@ -138,7 +137,7 @@ class SettleOutageTest {
         String name = "settle-held-" + mode.toLowerCase();
         FlowSpec spec = flow(name, mode);
         H h = new H();
-        WiggleServer server = startServer(Duration.ofSeconds(20));
+        WiggleTestServer server = startServer(Duration.ofSeconds(20));
         try (WiggleClient client = new WiggleClient("localhost:" + port);
              Worker worker = new Worker(client, "w-" + Ids.next("x"),
                      WorkerOptions.defaults().withLease(Duration.ofSeconds(1)))
@@ -169,7 +168,7 @@ class SettleOutageTest {
         String name = "settle-held-late";
         FlowSpec spec = flow(name, "SERVER");
         H h = new H();
-        WiggleServer server = startServer(Duration.ofMillis(500));
+        WiggleTestServer server = startServer(Duration.ofMillis(500));
         WorkerOptions slowResend = new WorkerOptions(4, Duration.ofSeconds(1), Duration.ofSeconds(1),
                 Duration.ofMillis(200), Duration.ofSeconds(5), 64, java.util.Set.of(), Duration.ZERO, false);
         try (WiggleClient client = new WiggleClient("localhost:" + port);

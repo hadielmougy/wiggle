@@ -1,5 +1,7 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
@@ -7,12 +9,10 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -24,7 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** Exclusive-choice ({@code choose}) behaviour: first match wins, exactly one branch runs. */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class ChooseTest {
+
+    @Autowired WiggleTestNode node;
 
     interface DefaultSteps {
         boolean isGold(Map<String, Object> c);
@@ -87,11 +91,7 @@ class ChooseTest {
 
     private void withServer(FlowSpec bp, Object handlers,
                             java.util.function.BiConsumer<WiggleClient, FlowSpec> body) throws Exception {
-        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "w-choose").registerHandler(handlers)) {
             client.register(bp);
             w.start();

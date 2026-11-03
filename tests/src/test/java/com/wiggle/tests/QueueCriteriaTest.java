@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.flow.FlowSpec;
@@ -15,9 +16,7 @@ import com.wiggle.core.criteria.QueueCriteria;
 import com.wiggle.core.criteria.Task_;
 import com.wiggle.core.wire.ControlPlane;
 import com.wiggle.core.wire.Msg;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -73,7 +72,7 @@ class QueueCriteriaTest {
             FlowSpec spec = flow(wf, mode);
             QueueCriteria vip = QueueCriteria.from(wf).where(cb -> cb.like(Task_.CORRELATION_ID, "vip-%"));
             QueueCriteria rest = QueueCriteria.from(wf).where(cb -> cb.not(cb.like(Task_.CORRELATION_ID, "vip-%")));
-            try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+            try (WiggleTestServer server = WiggleTestServer.start(config());
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker v = new Worker(client, "vip", WorkerOptions.defaults().withCriteria(vip))
                          .registerHandler(wf, new H("vip", ranOn));
@@ -113,7 +112,7 @@ class QueueCriteriaTest {
             Map<String, Set<String>> ranOn = new ConcurrentHashMap<>();
             String wf = unique("qc-region");
             FlowSpec spec = regionFlow(wf, mode);
-            try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+            try (WiggleTestServer server = WiggleTestServer.start(config());
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker eu = new Worker(client, "eu", WorkerOptions.defaults().withCriteria(inRegion(wf, "eu")))
                          .registerHandler(wf, new H("eu", ranOn));
@@ -140,7 +139,7 @@ class QueueCriteriaTest {
             Map<String, String> byStep = new ConcurrentHashMap<>();
             String wf = unique("qc-move");
             FlowSpec spec = regionFlow(wf, mode);
-            try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+            try (WiggleTestServer server = WiggleTestServer.start(config());
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker eu = new Worker(client, "eu", WorkerOptions.defaults().withCriteria(inRegion(wf, "eu")))
                          .registerHandler(wf, new Mover("eu", byStep));
@@ -170,7 +169,7 @@ class QueueCriteriaTest {
         ServerConfig longPolls = new ServerConfig(TestPorts.free(), "qc-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofSeconds(10), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(longPolls, new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(longPolls);
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker v = new Worker(client, "vip", WorkerOptions.defaults().withConcurrency(1).withCriteria(vip))
                      .registerHandler(wf, new H("vip", new ConcurrentHashMap<>()));
@@ -203,7 +202,7 @@ class QueueCriteriaTest {
             FlowSpec spec = flow(wf, mode);
             QueueCriteria front = QueueCriteria.from(wf).where(cb -> cb.in(Task_.STEP, "a", "b", "d"));
             QueueCriteria back = QueueCriteria.from(wf).where(cb -> cb.equal(Task_.STEP, "c"));
-            try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+            try (WiggleTestServer server = WiggleTestServer.start(config());
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker f = new Worker(client, "front", WorkerOptions.defaults().withCriteria(front))
                          .registerHandler(wf, new H("front", ranOn, byStep));
@@ -235,7 +234,7 @@ class QueueCriteriaTest {
             QueueCriteria all = QueueCriteria.from(wf);
             QueueCriteria onlyD = QueueCriteria.from(other).where(cb -> cb.equal(Task_.STEP, "d"));
             QueueCriteria onlyC = QueueCriteria.from(other).where(cb -> cb.equal(Task_.STEP, "c"));
-            try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+            try (WiggleTestServer server = WiggleTestServer.start(config());
                  WiggleClient client = new WiggleClient(server.baseUrl());
                  Worker f = new Worker(client, "front", WorkerOptions.defaults().withCriteria(all, onlyD))
                          .registerHandler(wf, new H("front", new ConcurrentHashMap<>(), byStep));
@@ -258,7 +257,7 @@ class QueueCriteriaTest {
         FlowSpec spec = flow(wf, ExecutionMode.LOCAL_ASYNC);
         String nodeB = nodeNamed(spec, "b");
         QueueCriteria onlyA = QueueCriteria.from(wf).where(cb -> cb.equal(Task_.STEP, "a"));
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(spec);
 
@@ -287,7 +286,7 @@ class QueueCriteriaTest {
     @Test
     @DisplayName("WGL-QC-050/051: queues and criteria together, or malformed criteria, are INVALID_ARGUMENT")
     void wireChecks() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config())) {
             String target = server.baseUrl();
             Msg ok = Msg.create().put("queue", "q");
             RawApi.Answer both = RawApi.call(target, ControlPlane.POLL_TASKS,
@@ -330,7 +329,7 @@ class QueueCriteriaTest {
             @Override public void close() { }
         };
         logger.addHandler(handler);
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "warned", WorkerOptions.defaults().withCriteria(typo))
                      .registerHandler(wf, new H("warned", new ConcurrentHashMap<>()))) {
@@ -347,7 +346,7 @@ class QueueCriteriaTest {
     @Test
     @DisplayName("WGL-QC-014: a worker refuses both withQueues and withCriteria")
     void workerRefusesBothForms() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new com.wiggle.dist.WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "both", WorkerOptions.defaults().withQueues("q")
                      .withCriteria(QueueCriteria.from("q")))) {

@@ -1,5 +1,6 @@
 package com.wiggle.server.api;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.flow.FlowSpec;
@@ -8,9 +9,7 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Tls;
 import com.wiggle.core.wire.ControlPlane;
 import com.wiggle.core.wire.Msg;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.Accounts;
 import com.wiggle.testfixtures.TestPorts;
 import com.wiggle.tests.RawApi;
@@ -55,7 +54,7 @@ class ApiAuthTest {
                 .withAuth(new ServerConfig.Auth(mode, Duration.ofSeconds(30)));
     }
 
-    private static WiggleClient client(WiggleServer server, String key) {
+    private static WiggleClient client(WiggleTestServer server, String key) {
         return new WiggleClient(server.baseUrl(), Tls.Options.DISABLED, false, key);
     }
 
@@ -79,7 +78,7 @@ class ApiAuthTest {
 
     @Test @DisplayName("enforce: no key or an unknown key is UNAUTHENTICATED; the health check needs none")
     void unauthenticated() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE));
              WiggleClient anonymous = client(server, null);
              WiggleClient forged = client(server, Accounts.KEY_PREFIX + "not-a-key")) {
             assertEquals(401, status(anonymous::workflowNames));
@@ -93,7 +92,7 @@ class ApiAuthTest {
 
     @Test @DisplayName("a key's role decides what it may do, scoped to the workflows and queues it names")
     void scopedRoles() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE))) {
             Accounts accounts = server.accounts();
             accounts.putRole("ops", "orders-app", List.of("workflow.register:orders", "instance.start:orders",
                     "read:orders", "instance.cancel:orders"), true);
@@ -151,7 +150,7 @@ class ApiAuthTest {
 
     @Test @DisplayName("two tenants on prefix scopes: listings are filtered, and neither can touch the other's work")
     void prefixTenants() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE))) {
             Accounts accounts = server.accounts();
             String adminKey = accounts.createApiKey("ops", "root", "admin", null);
             try (WiggleClient admin = client(server, adminKey);
@@ -204,7 +203,7 @@ class ApiAuthTest {
 
     @Test @DisplayName("a branch's sub-flow needs the start permission on its workflow, as a direct start does")
     void createdSubFlowsAreScoped() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE))) {
             Accounts accounts = server.accounts();
             try (WiggleClient acme = client(server, tenantKey(accounts, "acme"));
                  WiggleClient globex = client(server, tenantKey(accounts, "globex"))) {
@@ -234,7 +233,7 @@ class ApiAuthTest {
 
     @Test @DisplayName("a worker with a key runs its steps, and stops being let in once the key is deleted")
     void workerAndRevocation() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE))) {
             Accounts accounts = server.accounts();
             accounts.putRole("ops", "worker", List.of("task.poll", "read:orders"), true);
             String adminKey = accounts.createApiKey("ops", "root", "admin", null);
@@ -254,7 +253,7 @@ class ApiAuthTest {
 
     @Test @DisplayName("an expired key is refused")
     void expiry() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE))) {
             String key = server.accounts().createApiKey("ops", "old", "admin", System.currentTimeMillis() - 1);
             try (WiggleClient c = client(server, key)) {
                 assertEquals(401, status(c::workflowNames));
@@ -265,7 +264,7 @@ class ApiAuthTest {
     @Test @DisplayName("log mode serves every call, and off mode reads no credential at all")
     void logAndOff() throws Exception {
         for (ServerConfig.ApiAuth mode : List.of(ServerConfig.ApiAuth.LOG, ServerConfig.ApiAuth.OFF)) {
-            try (WiggleServer server = new WiggleServer(config(mode), new PostgresStorageFactory()).start();
+            try (WiggleTestServer server = WiggleTestServer.start(config(mode));
                  WiggleClient anonymous = client(server, null)) {
                 anonymous.register(ORDERS);
                 assertTrue(anonymous.workflowNames().contains("orders"), mode.name());
@@ -280,7 +279,7 @@ class ApiAuthTest {
      */
     @Test @DisplayName("every RPC except the health check is refused to a caller without its permission")
     void everyRpcIsChecked() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(ServerConfig.ApiAuth.ENFORCE), new PostgresStorageFactory()).start()) {
+        try (WiggleTestServer server = WiggleTestServer.start(config(ServerConfig.ApiAuth.ENFORCE))) {
             server.accounts().putRole("ops", "nothing", List.of("user.manage"), true);   // no RPC needs it
             String key = server.accounts().createApiKey("ops", "nobody", "nothing", null);
             List<String> unchecked = new ArrayList<>();

@@ -1,5 +1,7 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
@@ -8,12 +10,10 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -37,7 +37,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Unversioned registration stays the default and serves every version, which is almost always
  * right: step names are stable across versions, so one implementation covers them all.
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class VersionScopedWorkerTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The step this spec names; a worker binds it by name. */
     interface OneStep {
@@ -49,12 +53,6 @@ class VersionScopedWorkerTest {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
         return n;
-    }
-
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "vs-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     /** v1 and v2 of one workflow: same step name, different topology, published as 1 and 2. */
@@ -100,8 +98,7 @@ class VersionScopedWorkerTest {
         AtomicInteger aRuns = new AtomicInteger();
         AtomicInteger bRuns = new AtomicInteger();
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
 
             FlowSpec one = v1();
             FlowSpec two = v2();
@@ -144,8 +141,7 @@ class VersionScopedWorkerTest {
     void unversionedWorkerServesEveryVersion() throws Exception {
         AtomicInteger runs = new AtomicInteger();
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
 
             FlowSpec one = v1();
             FlowSpec two = v2();
@@ -169,8 +165,7 @@ class VersionScopedWorkerTest {
     @Test
     @DisplayName("binding a version that is not registered fails at startup, not at the first task")
     void bindingAnUnknownVersionFailsFast() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
 
             FlowSpec one = v1();
             client.register(one);

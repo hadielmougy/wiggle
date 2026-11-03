@@ -1,11 +1,10 @@
 package com.wiggle.server.topology;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.ShardIds;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -82,7 +81,7 @@ class PlacementTest {
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0).withTopology(t);
         FlowSpec flow = FlowSpec.define("topo", 1, Map.class, Steps.class, (f, s) -> f.thenApply(s::work));
 
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(flow);
             Map<Integer, Integer> landed = new HashMap<>();

@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
@@ -9,9 +10,7 @@ import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.RetryPolicy;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -66,7 +65,7 @@ class ErrorHandlingTest {
     }
 
     private InstanceView run(FlowSpec spec, Object handlers, Map<String, Object> input) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(spec);
             try (Worker w = new Worker(client, "err-" + Ids.next("x")).registerHandler(handlers).start()) {
@@ -158,7 +157,7 @@ class ErrorHandlingTest {
         FlowSpec spec = FlowSpec.define("cancelme", 1, Map.class, Slow.class, (f, s) ->
                 f.thenSleep("hold", Duration.ofSeconds(20)).thenApply(s::park));
 
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(spec);
             try (Worker w = new Worker(client, "err-" + Ids.next("x")).registerHandler(new H()).start()) {

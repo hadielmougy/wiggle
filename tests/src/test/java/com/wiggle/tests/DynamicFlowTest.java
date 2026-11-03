@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.CompensableActivity;
@@ -16,9 +17,7 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.core.RetryPolicy;
 import com.wiggle.core.ScratchKeys;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -480,7 +479,7 @@ class DynamicFlowTest {
         FlowSpec spec = FlowSpec.define("dyn-nodes", 1, Map.class, ServerNodeSteps.class, (f, s) -> f
                 .thenApply(s::fulfil)
                 .combine(s::summarise));
-        try (WiggleServer server = new WiggleServer(config(TestStorage.url("dynnodes")), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(TestStorage.url("dynnodes")));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "dynflow-" + Ids.next("x"))
                      .registerHandler(new ServerNodesH()).registerHandler(new ChildH())) {
@@ -622,7 +621,7 @@ class DynamicFlowTest {
 
     private InstanceView run(FlowSpec spec, Object handlers, Map<String, Object> input, String jdbcUrl)
             throws Exception {
-        try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(jdbcUrl));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "dynflow-" + Ids.next("x")).registerHandler(handlers)) {
             client.register(spec);

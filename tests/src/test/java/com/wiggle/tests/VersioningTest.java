@@ -1,15 +1,14 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.docs.VersioningSnippet;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -60,7 +59,7 @@ class VersioningTest {
 
     @Test @DisplayName("republishing a changed graph under a live version is refused, not silently applied")
     void changedGraphUnderALiveVersionIsRefused() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             client.register(VersioningSnippet.v1());
@@ -85,7 +84,7 @@ class VersioningTest {
     @Test @DisplayName("with WIGGLE_ALLOW_GRAPH_REPLACE set, force replaces the published graph")
     void forceReplacesWhenPermitted() throws Exception {
         System.setProperty("wiggle.allowGraphReplace", "true");
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             client.register(VersioningSnippet.v1());
@@ -109,7 +108,7 @@ class VersioningTest {
 
     @Test @DisplayName("force is refused unless the server is configured to allow a replacement")
     void forceNeedsServerConsent() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             client.register(VersioningSnippet.v1());
@@ -127,7 +126,7 @@ class VersioningTest {
 
     @Test @DisplayName("registering an unchanged graph is a no-op; a changed one adds a version")
     void registrationIsIdempotent() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec v1 = VersioningSnippet.v1();
@@ -146,7 +145,7 @@ class VersioningTest {
 
     @Test @DisplayName("an in-flight instance keeps the version it started on, whatever is registered after")
     void inFlightInstancesStayOnTheirVersion() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec v1 = VersioningSnippet.v1();
@@ -168,7 +167,7 @@ class VersioningTest {
 
     @Test @DisplayName("an unscoped worker serves every version; step names are what it binds")
     void unscopedWorkerServesEveryVersion() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec v1 = VersioningSnippet.v1();
@@ -196,7 +195,7 @@ class VersioningTest {
     @Test @DisplayName("unscoped binding is against ONE graph: a step only the newer version has "
             + "is unbound if the worker bound the older one")
     void unscopedBindingIsAgainstOneGraphOnly() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec v1 = VersioningSnippet.v1();
@@ -221,7 +220,7 @@ class VersioningTest {
 
     @Test @DisplayName("a scoped worker will not touch another version's work")
     void scopedWorkerClaimsOnlyItsOwnVersion() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec v1 = VersioningSnippet.v1();

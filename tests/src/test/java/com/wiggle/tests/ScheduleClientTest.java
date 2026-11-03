@@ -1,16 +1,16 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.ScheduleInfo;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.client.worker.Worker;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.Map;
@@ -21,17 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Schedule management over the control-plane API: create (interval and cron), list, delete. */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class ScheduleClientTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The step this spec names; a worker binds it by name. */
     interface OneStep {
         Map<String, Object> work(Map<String, Object> ctx);
-    }
-
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "schedc-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     @Test @DisplayName("a client creates, lists and deletes interval and cron schedules")
@@ -39,8 +37,7 @@ class ScheduleClientTest {
         FlowSpec bpA = FlowSpec.define("schedc-probe-a", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         FlowSpec bpB = FlowSpec.define("schedc-probe-b", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "schedc-w")) {
             client.register(bpA);
             client.register(bpB);
@@ -81,8 +78,7 @@ class ScheduleClientTest {
     void createIsIdempotentPerWorkflow() throws Exception {
         FlowSpec bp = FlowSpec.define("schedc-probe-dup", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "schedc-w2")) {
             client.register(bp);
             w.start();

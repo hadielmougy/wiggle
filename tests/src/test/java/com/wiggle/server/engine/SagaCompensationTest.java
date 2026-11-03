@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.worker.CompensableActivity;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
@@ -10,13 +12,12 @@ import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.PermanentActivityException;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -36,7 +37,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * just FAILS. Each compensator receives its OWN step's input/result snapshots (replace semantics
  * make the latest context unusable for undo — see docs/saga-compensation.md).
  */
+@WiggleBootTest
+@TestPropertySource(properties = {"WIGGLE_LEASE_MILLIS=30000", "WIGGLE_LONGPOLL_MAX_MILLIS=200"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class SagaCompensationTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface OneStep {
@@ -68,15 +74,8 @@ class SagaCompensationTest {
         return new Step();
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "saga-test", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
-                Duration.ofMillis(200), Duration.ofHours(1), 100, 0);
-    }
-
-    private static InstanceView run(FlowSpec bp, Object handlers) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+    private InstanceView run(FlowSpec bp, Object handlers) throws Exception {
+        try (WiggleClient client = node.client();
              Worker worker = new Worker(client, "saga-w").registerHandler(handlers)) {
             client.register(bp);
             worker.start();

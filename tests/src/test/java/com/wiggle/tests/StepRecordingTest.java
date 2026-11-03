@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.TokenInfo;
 import com.wiggle.client.flow.FlowSpec;
@@ -7,10 +8,7 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RetryPolicy;
-import com.wiggle.dist.WiggleStorageFactory;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -74,7 +72,7 @@ class StepRecordingTest {
             default -> f.executeInLocalAsync();
         }).thenApply(s::a).thenFilter(s::ok).thenApply(s::b, RetryPolicy.fixed(3, Duration.ofMillis(10))));
 
-        try (WiggleServer server = server(store);
+        try (WiggleTestServer server = server(store);
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "w-" + Ids.next("x")).registerHandler(name, new H())) {
             client.register(spec);
@@ -115,15 +113,15 @@ class StepRecordingTest {
                 .orElseThrow(() -> new AssertionError("no token for " + activity + " in " + tokens));
     }
 
-    private static WiggleServer server(String store) throws java.io.IOException {
+    private static WiggleTestServer server(String store) throws java.io.IOException {
         String url = store.equals("h2")
                 ? "jdbc:h2:mem:step-io-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1"
                 : null;
         ServerConfig config = new ServerConfig(TestPorts.free(), "step-io", url, url == null ? null : "sa", url == null ? null : "", 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        return url == null ? new WiggleServer(config, new PostgresStorageFactory()).start()
-                : new WiggleServer(config, new WiggleStorageFactory()).start();
+        return url == null ? WiggleTestServer.start(config)
+                : WiggleTestServer.start(config);
     }
 
     private static Map<String, Object> put(Map<String, Object> ctx, String k, Object v) {

@@ -1,13 +1,13 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.Map;
@@ -21,7 +21,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@code idleBackoff} (default 200ms) per wave even though its (trivial) steps finished in
  * milliseconds -- gating SERVER-mode throughput to one concurrency-sized wave per nap.
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class WorkerPacingTest {
+
+    @Autowired WiggleTestNode node;
 
     private static final int STEPS = 10;
     private static final int INSTANCES = 6;
@@ -65,11 +69,7 @@ class WorkerPacingTest {
 
     @Test @DisplayName("a saturated worker drains promptly (no idle-backoff wave gating)")
     void saturatedWorkerDrainsPromptly() throws Exception {
-        ServerConfig config = new ServerConfig(TestPorts.free(), "pacing-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
             client.register(chain());
             // Pre-submit so the worker is saturated from its first poll.
             String[] ids = new String[INSTANCES];

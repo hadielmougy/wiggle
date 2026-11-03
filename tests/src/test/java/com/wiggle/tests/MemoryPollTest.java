@@ -1,13 +1,12 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.PollResult;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.core.Ids;
 import com.wiggle.core.Tls;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -44,7 +43,7 @@ class MemoryPollTest {
         FlowSpec bp = FlowSpec.define("mem-" + Ids.next("wf"), 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         // 0.0001 is below any running JVM's live-set/max, so the guard is always under pressure;
         // reject ratio 1.0 => every poll is rejected -- deterministic.
-        try (WiggleServer server = new WiggleServer(config(0.0001, 1.0), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0.0001, 1.0));
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             client.start(bp, Map.of());   // there IS claimable work, but the poll is still rejected
@@ -68,7 +67,7 @@ class MemoryPollTest {
         double ratio = 0.30;
         // Under pressure (threshold below live-set/max) with a 30% reject ratio; wait=0 so served
         // polls return an immediate empty (retry 0), and rejected polls an immediate empty (retry>0).
-        try (WiggleServer server = new WiggleServer(config(0.0001, ratio), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0.0001, ratio));
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             System.gc();
             Thread.sleep(100);
@@ -95,7 +94,7 @@ class MemoryPollTest {
     void noRejectUnderThreshold() throws Exception {
         FlowSpec bp = FlowSpec.define("mem-ok-" + Ids.next("wf"), 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
         // Threshold 0.999 is effectively never crossed, so even reject-ratio 1.0 never triggers.
-        try (WiggleServer server = new WiggleServer(config(0.999, 1.0), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(0.999, 1.0));
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             client.start(bp, Map.of());

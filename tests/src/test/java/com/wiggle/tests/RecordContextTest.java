@@ -1,5 +1,7 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
@@ -9,12 +11,10 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.Ids;
 import com.wiggle.core.RecordMapper;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -27,7 +27,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * explicit typed combine all operating on typed records rather than JSON maps.
  * (The pure codec round-trip has its own scenario; this covers the record path end to end.)
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class RecordContextTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The workflow context: immutable, evolved through withers, merged across branches. */
     public record Shipment(String id, int items, BigDecimal total, String status,
@@ -72,17 +76,10 @@ class RecordContextTest {
         public Shipment dispatch(Shipment s) { return s.withStatus("DISPATCHED"); }
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "rec-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     @Test @DisplayName("a record context survives gate, fork merge and typed decode end to end")
     void recordRoundTripThroughEngine() throws Exception {
         FlowSpec bp = flowSpec();
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
             client.register(bp);
             w.start();
@@ -104,8 +101,7 @@ class RecordContextTest {
     @Test @DisplayName("a false gate on a record context ends the instance as gated")
     void recordGateShortCircuits() throws Exception {
         FlowSpec bp = flowSpec();
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "rec-" + Ids.next("x")).registerHandler(new ShipmentH())) {
             client.register(bp);
             w.start();

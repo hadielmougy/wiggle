@@ -1,11 +1,10 @@
 package com.wiggle.console;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.core.Tls;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.AuthCache;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
@@ -57,7 +56,7 @@ class ConsoleUsersTest {
     /** A portal over one server's accounts, with an optional built-in admin password. */
     private interface Body { void run(String base, HttpClient http) throws Exception; }
 
-    private static ConsoleServer portal(WiggleServer server, String builtinPassword) {
+    private static ConsoleServer portal(WiggleTestServer server, String builtinPassword) {
         AuthCache cache = new AuthCache(server.accounts(), 30_000, System::currentTimeMillis).start(50);
         ConsoleAuth auth = new ConsoleAuth("admin", builtinPassword, "viewer", null, false, server.accounts(), cache);
         return new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()), auth, TestPorts.free(),
@@ -65,7 +64,7 @@ class ConsoleUsersTest {
     }
 
     private static void withPortal(String builtinPassword, Body body) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              ConsoleServer console = portal(server, builtinPassword)) {
             body.run("http://localhost:" + console.port(), HttpClient.newHttpClient());
         }
@@ -111,7 +110,7 @@ class ConsoleUsersTest {
 
     @Test @DisplayName("a session opened on one portal node is served by another, and a logout ends it on both")
     void sessionsAreShared() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              ConsoleServer one = portal(server, "root-pass");
              ConsoleServer two = portal(server, "root-pass")) {
             HttpClient http = HttpClient.newHttpClient();
@@ -164,7 +163,7 @@ class ConsoleUsersTest {
 
     @Test @DisplayName("first run: everything leads to the setup screen until the admin password is set, then never again")
     void firstRunSetup() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              ConsoleServer one = portal(server, null)) {
             HttpClient http = HttpClient.newHttpClient();
             String base = "http://localhost:" + one.port();

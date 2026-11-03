@@ -1,15 +1,16 @@
 package com.wiggle.client.worker;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.WorkflowDefinition;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -29,7 +30,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link ForFlow @ForFlow}); {@link Compensable} on the result binds the undo. Everything still
  * registers through the one {@code worker.handlers(...)} call, mixing freely with plain methods.
  */
+@WiggleBootTest
+@TestPropertySource(properties = {"WIGGLE_LEASE_MILLIS=30000", "WIGGLE_LONGPOLL_MAX_MILLIS=200"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class TypedActivityTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface OneStep {
@@ -250,12 +256,7 @@ class TypedActivityTest {
 
             public EffectActivity<Map<String, Object>> auditLog() { return ctx -> { }; }
         }
-
-        ServerConfig config = new ServerConfig(TestPorts.free(), "typed-test", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
-                Duration.ofMillis(200), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker worker = new Worker(client, "typed-w")
                      
                      .registerHandler(new FlowHandlers())) {

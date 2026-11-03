@@ -3,6 +3,7 @@ package com.wiggle.boot.test;
 import com.wiggle.boot.WiggleApplication;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ContextConfiguration;
 
 import java.lang.annotation.Documented;
@@ -19,7 +20,9 @@ import java.lang.annotation.Target;
  * seen, and test properties override both. Profiles add to it: {@code portal} and {@code probe}
  * serve those on ports of their own, {@code postgres} runs on {@code WIGGLE_TEST_PG_URL}.
  *
- * <p>Test classes with the same configuration share one node, as Spring caches contexts.
+ * <p>Each test class has a node of its own, shared by its tests; a class whose tests each need a new
+ * one adds {@code @DirtiesContext(classMode = AFTER_EACH_TEST_METHOD)}. Tests that share a node keep
+ * to queues of their own: a closed worker's long poll can still claim a token on its queue.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
@@ -28,5 +31,6 @@ import java.lang.annotation.Target;
 @SpringBootTest(classes = WiggleApplication.class, webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
 @ContextConfiguration(initializers = TestNodeInitializer.class)
 @Import(WiggleTestNode.Config.class)
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public @interface WiggleBootTest {
 }

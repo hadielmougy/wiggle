@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestNodes;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
@@ -7,14 +8,11 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
 import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.engine.ReportOutcome;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Storage;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -47,12 +45,6 @@ class LocalSyncTest {
         return n;
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "ls-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     /** A five-step linear pipeline; each step's value depends on the previous. */
     private static FlowSpec linear(ExecutionMode mode) {
         return FlowSpec.define("ls-linear", 1, Map.class, OneStep.class, (f, s) -> Modes.in(f, mode)
@@ -80,8 +72,8 @@ class LocalSyncTest {
                 ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             AtomicInteger runs = new AtomicInteger();
             FlowSpec bp = linear(mode);
-            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-                 WiggleClient client = new WiggleClient(server.baseUrl());
+            try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+                 WiggleClient client = nodes.node(0).client();
                  Worker w = new Worker(client, "w-" + Ids.next("x"),
                          WorkerOptions.defaults().withConcurrency(4)).registerHandler(new LinearH(runs))) {
                 client.register(bp);

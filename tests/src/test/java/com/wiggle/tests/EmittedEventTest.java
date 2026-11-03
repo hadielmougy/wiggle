@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestNodes;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
@@ -12,10 +13,7 @@ import com.wiggle.core.EventView;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RetryPolicy;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -91,12 +89,6 @@ class EmittedEventTest {
         }
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "emit-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     private static List<EventView> of(WiggleServer server, String instanceId) {
         return server.engine().events(0, 1_000).stream().filter(e -> e.instanceId().equals(instanceId)).toList();
     }
@@ -110,15 +102,15 @@ class EmittedEventTest {
         for (ExecutionMode mode : List.of(ExecutionMode.SERVER, ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC)) {
             FlowSpec spec = FlowSpec.define("emit-flow", 1, Map.class, Steps.class,
                     (f, s) -> Modes.in(f, mode).thenApply(s::charge).thenApply(s::ship));
-            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-                 WiggleClient client = new WiggleClient(server.baseUrl());
+            try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+                 WiggleClient client = nodes.node(0).client();
                  Worker worker = new Worker(client, "w-emit", WorkerOptions.defaults()).registerHandler(new H())) {
                 client.register(spec);
                 worker.start();
                 String id = client.start(spec, Map.of());
                 assertEquals("COMPLETED", client.awaitCompletion(id, Duration.ofSeconds(20)).status(), mode.toString());
 
-                List<EventView> log = of(server, id);
+                List<EventView> log = of(nodes.node(0).server(), id);
                 assertEquals(List.of("wf.started", "payment.captured", "parcel.dispatched",
                                 "customer.notified", "wf.completed"), types(log),
                         mode + ": emitted entries sit in the log where they happened");
@@ -136,8 +128,8 @@ class EmittedEventTest {
 
     @Test @DisplayName("an attempt that throws leaves nothing behind, and its retry emits fresh")
     void onlyWhatCompleted() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+             WiggleClient client = nodes.node(0).client();
              Worker worker = new Worker(client, "w-emit-fail", WorkerOptions.defaults())
                      .registerHandler(new Thrower()).registerHandler(new Retrier())) {
             FlowSpec thrower = FlowSpec.define("emit-thrower", 1, Map.class, OneStep.class,
@@ -150,13 +142,13 @@ class EmittedEventTest {
 
             String failed = client.start(thrower, Map.of());
             assertEquals("FAILED", client.awaitCompletion(failed, Duration.ofSeconds(20)).status());
-            assertEquals(List.of("wf.started", "wf.failed"), types(of(server, failed)),
+            assertEquals(List.of("wf.started", "wf.failed"), types(of(nodes.node(0).server(), failed)),
                     "the attempt threw, so what it emitted rolled back with it");
 
             Retrier.ATTEMPTS.set(0);
             String retried = client.start(retrier, Map.of());
             assertEquals("COMPLETED", client.awaitCompletion(retried, Duration.ofSeconds(20)).status());
-            List<EventView> log = of(server, retried);
+            List<EventView> log = of(nodes.node(0).server(), retried);
             assertEquals(List.of("wf.started", "invoice.issued", "wf.completed"), types(log),
                     "one entry, from the attempt that completed");
             assertEquals(2L, ((Number) log.get(1).payload().get("attempt")).longValue(),
@@ -171,8 +163,8 @@ class EmittedEventTest {
         assertTrue(reserved.getMessage().contains("reserved"), reserved.getMessage());
         assertThrows(IllegalArgumentException.class, () -> new EmittedEvent("  ", Map.of()));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+             WiggleClient client = nodes.node(0).client();
              Worker worker = new Worker(client, "w-emit-bad", WorkerOptions.defaults())
                      .registerHandler(new BadPayload()).registerHandler(new Reserved())) {
             FlowSpec bad = FlowSpec.define("emit-badpayload", 1, Map.class, OneStep.class,
@@ -186,12 +178,12 @@ class EmittedEventTest {
             InstanceView v = client.awaitCompletion(client.start(bad, Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", v.status());
             assertTrue(v.error().contains("record or a map"), v.error());
-            assertEquals(List.of("wf.started", "wf.failed"), types(of(server, v.id())));
+            assertEquals(List.of("wf.started", "wf.failed"), types(of(nodes.node(0).server(), v.id())));
 
             InstanceView s = client.awaitCompletion(client.start(spoof, Map.of()), Duration.ofSeconds(20));
             assertEquals("FAILED", s.status());
             assertTrue(s.error().contains("reserved"), s.error());
-            assertTrue(types(of(server, s.id())).stream().noneMatch(t -> t.equals("wf.completed")),
+            assertTrue(types(of(nodes.node(0).server(), s.id())).stream().noneMatch(t -> t.equals("wf.completed")),
                     "a handler cannot forge a lifecycle entry");
         }
     }

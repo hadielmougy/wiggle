@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestNodes;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
@@ -9,10 +10,6 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.dist.WiggleStorageFactory;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -33,15 +30,9 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  */
 class NestedScopesTest {
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "nest-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     private InstanceView run(FlowSpec bp, Object handlers, Map<String, Object> input) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new WiggleStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+             WiggleClient client = nodes.node(0).client();
              Worker w = new Worker(client, "nest-" + Ids.next("x")).registerHandler(handlers)) {
             client.register(bp);
             w.start();

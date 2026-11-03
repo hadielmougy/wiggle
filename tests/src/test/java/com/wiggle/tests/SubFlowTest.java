@@ -1,17 +1,17 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -24,7 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Sub-workflows: a node starts a child instance with the parent's context, the parent waits,
  * and the child's outcome (final context, failure, cancellation) propagates back.
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class SubFlowTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface ParentSteps {
@@ -41,12 +45,6 @@ class SubFlowTest {
         Map<String, Object> n = new LinkedHashMap<>(ctx);
         n.put(k, v);
         return n;
-    }
-
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "sub-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     private static FlowSpec parent() {
@@ -84,8 +82,7 @@ class SubFlowTest {
                 .thenApply(s::childWork)
                 .thenApply(s::childDone));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "sub-w")
                      .registerHandler(new ParentH()).registerHandler(new ChildOkH())) {
             client.register(child);
@@ -107,8 +104,7 @@ class SubFlowTest {
         FlowSpec child = FlowSpec.define("sub-child", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenApply(s::childWork, com.wiggle.core.RetryPolicy.fixed(1, Duration.ofMillis(1))));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "sub-w2")
                      .registerHandler(new ParentH()).registerHandler(new ChildFailH())) {
             client.register(child);
@@ -123,8 +119,7 @@ class SubFlowTest {
 
     @Test @DisplayName("an unregistered child workflow fails the parent immediately")
     void unregisteredChildFailsParent() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "sub-w3").registerHandler(new ParentH())) {
             client.register(parent());   // the child is deliberately NOT registered
             w.start();
@@ -140,8 +135,7 @@ class SubFlowTest {
                 .thenAwait("never-arrives")   // the child parks so it is definitely still running
                 .thenApply(s::childDone));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "sub-w4")
                      .registerHandler(new ParentH()).registerHandler(new ChildParkH())) {
             client.register(child);
@@ -151,10 +145,10 @@ class SubFlowTest {
 
             // Wait until the child is parked on its signal (proves it is running).
             long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-            while (server.engine().pendingSignals(10).isEmpty() && System.nanoTime() < deadline) {
+            while (node.server().engine().pendingSignals(10).isEmpty() && System.nanoTime() < deadline) {
                 Thread.sleep(20);
             }
-            String childId = server.engine().pendingSignals(10).get(0).instanceId;
+            String childId = node.server().engine().pendingSignals(10).get(0).instanceId;
 
             client.cancel(parentId, "changed my mind");
             assertEquals("CANCELLED", client.instance(parentId).status());

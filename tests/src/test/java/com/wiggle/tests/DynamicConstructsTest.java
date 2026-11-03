@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
@@ -13,11 +14,9 @@ import com.wiggle.core.Node;
 import com.wiggle.core.NodeKind;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.WorkflowEngine;
 import com.wiggle.server.store.Storage;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -90,7 +89,7 @@ class DynamicConstructsTest {
 
     /** The same harness for a record context, which a typed accessor needs. */
     private InstanceView runTyped(FlowSpec bp, Object handlers, Object input) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(null), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(null));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "dyn-" + Ids.next("x")).registerHandler(handlers)) {
             client.register(bp);
@@ -101,7 +100,7 @@ class DynamicConstructsTest {
 
     private InstanceView run(FlowSpec bp, Object handlers, Map<String, Object> input, String jdbcUrl)
             throws Exception {
-        try (WiggleServer server = new WiggleServer(config(jdbcUrl), new WiggleStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config(jdbcUrl));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker w = new Worker(client, "dyn-" + Ids.next("x")).registerHandler(handlers)) {
             client.register(bp);

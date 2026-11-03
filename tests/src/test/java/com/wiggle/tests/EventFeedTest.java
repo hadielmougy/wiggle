@@ -1,15 +1,12 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestNodes;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.EventView;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -32,12 +29,6 @@ class EventFeedTest {
     @ForFlow("feed-flow")
     static final class H {
         public Map<String, Object> a(Map<String, Object> c) { return c; }
-    }
-
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "feed-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     private static FlowSpec spec() {
@@ -65,8 +56,8 @@ class EventFeedTest {
 
     @Test @DisplayName("a consumer reads the log from where it asked, and only an ack moves it on")
     void pullAndAck() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+             WiggleClient client = nodes.node(0).client();
              Worker worker = new Worker(client, "w-feed", WorkerOptions.defaults()).registerHandler(new H())) {
             FlowSpec spec = spec();
             client.register(spec);
@@ -120,8 +111,8 @@ class EventFeedTest {
 
     @Test @DisplayName("a long poll waits for an entry and returns it, or gives up empty at its deadline")
     void longPoll() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+             WiggleClient client = nodes.node(0).client();
              Worker worker = new Worker(client, "w-feed-wait", WorkerOptions.defaults()).registerHandler(new H())) {
             FlowSpec spec = spec();
             client.register(spec);
@@ -147,8 +138,8 @@ class EventFeedTest {
     @Test @DisplayName("retention keeps what the slowest consumer has not acknowledged")
     void retentionWaitsForConsumers() throws Exception {
         System.setProperty("wiggle.events.retentionMillis", "1");
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+             WiggleClient client = nodes.node(0).client();
              Worker worker = new Worker(client, "w-feed-retain", WorkerOptions.defaults()).registerHandler(new H())) {
             FlowSpec spec = spec();
             client.register(spec);
@@ -160,14 +151,14 @@ class EventFeedTest {
             client.ackEvents("slow", all.get(0).seq());   // acknowledge the first entry only
             Thread.sleep(20);
 
-            assertEquals(1, server.engine().trimEvents(100), "only what the cursor has passed is trimmed");
-            List<EventView> left = server.engine().events(0, 100);
+            assertEquals(1, nodes.node(0).server().engine().trimEvents(100), "only what the cursor has passed is trimmed");
+            List<EventView> left = nodes.node(0).server().engine().events(0, 100);
             assertEquals(1, left.size(), "the unacknowledged entry stayed");
             assertEquals(all.get(1).seq(), left.get(0).seq());
 
             client.ackEvents("slow", all.get(1).seq());
-            assertEquals(1, server.engine().trimEvents(100), "acknowledged, so now it goes");
-            assertTrue(server.engine().events(0, 100).isEmpty());
+            assertEquals(1, nodes.node(0).server().engine().trimEvents(100), "acknowledged, so now it goes");
+            assertTrue(nodes.node(0).server().engine().events(0, 100).isEmpty());
         } finally {
             System.clearProperty("wiggle.events.retentionMillis");
         }

@@ -9,6 +9,7 @@ import com.wiggle.server.api.ApiServlet;
 import com.wiggle.server.http.TomcatTls;
 import com.wiggle.server.store.StorageFactory;
 import org.apache.coyote.http2.Http2Protocol;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
 import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
@@ -18,7 +19,10 @@ import org.springframework.core.env.Environment;
 
 import java.io.IOException;
 
-/** The node: its settings, its store and its parts, and the API servlet on the web server's port. */
+/**
+ * The node: its settings, its store and its parts, and the API servlet on the web server's port. A
+ * {@link ServerConfig} or {@link StorageFactory} bean registered before these are read is used instead.
+ */
 @Configuration(proxyBeanMethods = false)
 class NodeConfiguration {
 
@@ -34,11 +38,13 @@ class NodeConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
     ServerConfig serverConfig(Settings settings) {
         return ServerConfig.from(settings);
     }
 
     @Bean
+    @ConditionalOnMissingBean
     StorageFactory storageFactory() {
         return new PostgresStorageFactory();
     }
