@@ -1,5 +1,7 @@
 package com.wiggle.server.engine;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
@@ -7,13 +9,12 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Node;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -31,7 +32,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * within its budget is untouched, and the bookkeeping counter never leaks into handler contexts
  * or the final context.
  */
+@WiggleBootTest
+@TestPropertySource(properties = {"WIGGLE_LEASE_MILLIS=30000", "WIGGLE_LONGPOLL_MAX_MILLIS=200"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class LoopBudgetTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface LoopSteps {
@@ -45,12 +51,6 @@ class LoopBudgetTest {
         Map<String, Object> a(Map<String, Object> ctx);
         Map<String, Object> b(Map<String, Object> ctx);
         boolean g(Map<String, Object> ctx);
-    }
-
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "loop-test", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
-                Duration.ofMillis(200), Duration.ofHours(1), 100, 0);
     }
 
     @ForFlow("loop-wf")
@@ -68,9 +68,8 @@ class LoopBudgetTest {
         public Map<String, Object> after(Map<String, Object> ctx) { return ctx; }
     }
 
-    private static InstanceView run(FlowSpec bp, Duration timeout) throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+    private InstanceView run(FlowSpec bp, Duration timeout) throws Exception {
+        try (WiggleClient client = node.client();
              Worker worker = new Worker(client, "loop-w").registerHandler(new LoopHandlers())) {
             client.register(bp);
             worker.start();

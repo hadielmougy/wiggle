@@ -1,17 +1,18 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -29,7 +30,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * case-insensitive name and its kind is taken from the signature (Map = task, boolean = gate, void =
  * effect); the graph confirms the exact name and gate-vs-task.
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class RegisterHandlersTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface OneStep {
@@ -55,12 +60,8 @@ class RegisterHandlersTest {
     }
 
     private void withServer(BiConsumer<WiggleClient, WiggleServer> body) throws Exception {
-        ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
-            body.accept(client, server);
+        try (WiggleClient client = node.client()) {
+            body.accept(client, node.server());
         }
     }
 

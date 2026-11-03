@@ -1,5 +1,7 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
@@ -9,13 +11,11 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -32,7 +32,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * to the single-run path. Every instance must still complete with the combine's exact context;
  * a lost fallback shows up here as a stuck join.
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class CrossInstanceBatchTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface ForkSteps {
@@ -56,12 +60,6 @@ class CrossInstanceBatchTest {
         }
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "xib-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     @Test @Timeout(60)
     @DisplayName("forked LOCAL_ASYNC handbacks batch across instances; same-instance arms fall back and the joins fire")
     void forkedHandbacksBatchAndFallBack() throws Exception {
@@ -69,8 +67,7 @@ class CrossInstanceBatchTest {
                 Wiggle.allOf(f.thenApply(s::a), f.thenApply(s::b))
                         .combine(s::pick)
                         .executeInLocalAsync());
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "xib-w",
                      WorkerOptions.defaults().withConcurrency(8).withCrossInstanceBatching(true)).registerHandler(new H())) {
             client.register(bp);
@@ -104,8 +101,7 @@ class CrossInstanceBatchTest {
                 .executeInLocalAsync()
                 .thenApply(s::x)
                 .thenApply(s::y));
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
             client.register(bp);
             client.start(bp, Map.of());
             client.start(bp, Map.of());

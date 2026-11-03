@@ -1,5 +1,7 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
@@ -7,12 +9,10 @@ import com.wiggle.client.worker.Worker;
 import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -23,7 +23,11 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** {@code .checkpoint()} plumbing (version hash) and its LOCAL_ASYNC behaviour (forces an early flush). */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class CheckpointTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The steps this spec names; a worker binds them by name. */
     interface OneStep {
@@ -54,12 +58,6 @@ class CheckpointTest {
         public Map<String, Object> a(Map<String, Object> ctx) { return put(ctx, "a", 1L); }
         public Map<String, Object> b(Map<String, Object> ctx) { bRunning.countDown(); await(releaseB); return put(ctx, "b", 2L); }
         public Map<String, Object> c(Map<String, Object> ctx) { return put(ctx, "c", 3L); }
-    }
-
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "cp-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
     }
 
     @Test @DisplayName("checkpoint is recorded, changes the fingerprint, and must follow a step")
@@ -94,8 +92,7 @@ class CheckpointTest {
                 .thenApply(s::b)
                 .thenApply(s::c));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "cp-w").registerHandler(new FlushH(bRunning, releaseB))) {
             client.register(bp);
             w.start();
@@ -103,7 +100,7 @@ class CheckpointTest {
 
             assertTrue(bRunning.await(10, TimeUnit.SECONDS), "worker reached step b");
             // The checkpoint after 'a' flushed it before 'b' started, so 'a' is already durable.
-            Map<String, Object> mid = Json.asObject(server.engine().instance(id).orElseThrow().context());
+            Map<String, Object> mid = Json.asObject(node.server().engine().instance(id).orElseThrow().context());
             assertEquals(1L, mid.get("a"), "checkpointed step committed before the next ran");
             assertNull(mid.get("b"), "the still-running step is not committed yet");
 
@@ -128,8 +125,7 @@ class CheckpointTest {
                 .thenApply(s::b)
                 .thenApply(s::c));
 
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "cp-w2").registerHandler(new NobufH(bRunning, releaseB))) {
             client.register(bp);
             w.start();
@@ -137,7 +133,7 @@ class CheckpointTest {
 
             assertTrue(bRunning.await(10, TimeUnit.SECONDS), "worker reached step b");
             // 'a' is still buffered (async flushes at the boundary), so nothing is committed yet.
-            Map<String, Object> mid = Json.asObject(server.engine().instance(id).orElseThrow().context());
+            Map<String, Object> mid = Json.asObject(node.server().engine().instance(id).orElseThrow().context());
             assertNull(mid.get("a"), "without a checkpoint, 'a' stays buffered until the run flushes");
 
             releaseB.countDown();

@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestNodes;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
@@ -9,10 +10,6 @@ import com.wiggle.core.ExecutionMode;
 import com.wiggle.core.Ids;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -55,12 +52,6 @@ class HandlerOnlyWorkerTest {
         return n;
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "how-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     /** A chain long enough that a local run has something to chain. */
     private static FlowSpec linear(ExecutionMode mode) {
         return FlowSpec.define("how-linear", 1, Map.class, OneStep.class, (f, s) -> Modes.in(f, mode)
@@ -90,8 +81,8 @@ class HandlerOnlyWorkerTest {
             AtomicInteger runs = new AtomicInteger();
             FlowSpec spec = linear(mode);
 
-            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-                 WiggleClient client = new WiggleClient(server.baseUrl())) {
+            try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+                 WiggleClient client = nodes.node(0).client()) {
 
                 client.register(spec);   // the author publishes the topology -- once, from the client
 
@@ -125,8 +116,8 @@ class HandlerOnlyWorkerTest {
         // have broken.
         for (ExecutionMode mode : new ExecutionMode[]{ExecutionMode.LOCAL_SYNC, ExecutionMode.LOCAL_ASYNC}) {
             FlowSpec spec = linear(mode);
-            try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-                 WiggleClient client = new WiggleClient(server.baseUrl())) {
+            try (WiggleTestNodes nodes = WiggleTestNodes.start(1, Map.of());
+                 WiggleClient client = nodes.node(0).client()) {
 
                 client.register(spec);
 

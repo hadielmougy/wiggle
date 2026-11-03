@@ -1,18 +1,17 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleClient.WiggleApiException;
 import com.wiggle.core.TaskActivation;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -25,7 +24,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the right status (404 not-found, 409 conflict, 400 bad request), not as opaque internals.
  * This exercises {@code HttpApi}'s status mapping and the client's reverse mapping together.
  */
+@WiggleBootTest
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class ApiErrorMappingTest {
+
+    @Autowired WiggleTestNode node;
 
     /** The step this spec names; a worker binds it by name. */
     interface OneStep {
@@ -34,16 +37,9 @@ class ApiErrorMappingTest {
         boolean check(Map<String, Object> ctx);
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "err-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     @Test @DisplayName("unknown ids and workflows surface as 404 over the API")
     void notFound() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
             WiggleApiException noTask = assertThrows(WiggleApiException.class,
                     () -> client.reportSteps("tok_nope", "w",
                             List.of(new WiggleClient.StepReport("any", Map.of(), null)), true));
@@ -59,12 +55,11 @@ class ApiErrorMappingTest {
     @Test @DisplayName("settling a task without its lease surfaces as 409 over the API")
     void conflict() throws Exception {
         FlowSpec bp = FlowSpec.define("err-conflict", 1, Map.class, OneStep.class, (f, s) -> f.thenApply(s::work));
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
             client.register(bp);
             String id = client.start(bp, Map.of());
             // No worker ever polls, so the token is READY (unleased); settling it must conflict.
-            Token token = server.engine().tokens(id).get(0);
+            Token token = node.server().engine().tokens(id).get(0);
             WiggleApiException e = assertThrows(WiggleApiException.class,
                     () -> client.reportSteps(token.id, "impostor",
                             List.of(new WiggleClient.StepReport(token.nodeId, Map.of(), null)), true));
@@ -78,8 +73,7 @@ class ApiErrorMappingTest {
         FlowSpec bp = FlowSpec.define("err-bad", 1, Map.class, OneStep.class, (f, s) -> f
                 .thenFilter(s::check)
                 .thenApply(s::after));
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl())) {
+        try (WiggleClient client = node.client()) {
             client.register(bp);
             client.start(bp, Map.of());
             List<TaskActivation> claimed =

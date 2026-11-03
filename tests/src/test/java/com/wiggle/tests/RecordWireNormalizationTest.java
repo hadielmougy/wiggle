@@ -1,18 +1,20 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleBootTest;
+import com.wiggle.boot.test.WiggleTestNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.RecordMapper;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.store.Rows.Token;
-import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.TestPropertySource;
 
 import java.time.Duration;
 import java.util.List;
@@ -25,7 +27,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * layer directly, and the wire only speaks the JSON model -- so the client must flatten
  * records first, or the caller's object cannot be written as JSON.
  */
+@WiggleBootTest
+@TestPropertySource(properties = {"WIGGLE_HEARTBEAT_INTERVAL_MILLIS=300"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class RecordWireNormalizationTest {
+
+    @Autowired WiggleTestNode node;
 
     public record Order(String id, String status, String approver) { }
 
@@ -47,12 +54,6 @@ class RecordWireNormalizationTest {
                 .thenApply(s::after));
     }
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "recwire-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(300), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     private static void awaitParked(WiggleServer server) throws InterruptedException {
         long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
         while (System.nanoTime() < deadline) {
@@ -65,14 +66,13 @@ class RecordWireNormalizationTest {
     @Test @DisplayName("start-by-name and signal both accept a record and flatten it for the wire")
     void recordThroughNameOverloadAndSignal() throws Exception {
         FlowSpec bp = flowSpec();
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             WiggleClient client = new WiggleClient(server.baseUrl());
+        try (WiggleClient client = node.client();
              Worker w = new Worker(client, "recwire-w").registerHandler(new OrderH())) {
             client.register(bp);
             w.start();
 
             String id = client.start("rec-wire", new Order("o-1", "NEW", null));
-            awaitParked(server);
+            awaitParked(node.server());
             client.signal(id, "approve", new Approval("hadi"));
 
             InstanceView v = client.awaitCompletion(id, Duration.ofSeconds(20));
