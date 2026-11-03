@@ -428,6 +428,19 @@ public final class WiggleClient implements AutoCloseable {
     public record ScheduleInfo(String id, String workflow, long everyMillis, String cron,
                                long nextFireAt, long createdAt) {}
 
+    /**
+     * Tells the server that {@code workerId} has stopped polling: its polls in progress return at once and
+     * claim nothing more. Answers how many there were. Tried once: a server that cannot be reached delivers
+     * nothing to the worker's polls either.
+     */
+    public int stopPolling(String workerId) {
+        try {
+            return (int) transport.call(ControlPlane.STOP_POLLING, Msg.create().put("workerId", workerId)).lng("stopped");
+        } catch (HttpTransport.RpcException e) {
+            throw new WiggleApiException(statusCode(e), e.getMessage(), e, e.unavailable);
+        }
+    }
+
     public void heartbeat(String taskId, String leaseOwner, long extendMillis) {
         call(() -> transport.call(ControlPlane.HEARTBEAT_TASK, Msg.create()
                 .put("taskId", taskId)

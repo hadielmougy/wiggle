@@ -201,6 +201,16 @@ public final class WorkflowEngine {
         return dispatch.poll(workerId, filter, max, leaseMillis, deadline, cancelled);
     }
 
+    /**
+     * Ends the polls in progress for {@code workerId}, which claim nothing more: the worker is stopping and
+     * would not receive it. Answers how many there were.
+     */
+    public int stopPolling(String workerId) {
+        int n = dispatch.stopPolling(workerId);
+        LOG.log(System.Logger.Level.DEBUG, () -> "stopPolling: worker " + workerId + ", " + n + " poll(s) ended");
+        return n;
+    }
+
     /** Extends the lease of an in-flight task (worker heartbeat for long-running steps). */
     public long extendLease(String taskId, String leaseOwner, long extraMillis) {
         return extendLease(taskId, leaseOwner, extraMillis, null);
