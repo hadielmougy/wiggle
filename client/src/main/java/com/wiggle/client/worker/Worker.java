@@ -332,17 +332,40 @@ public final class Worker implements AutoCloseable {
      * Stops polling and lets in-flight steps finish. Flips {@link #running} first, so any
      * {@link LocalRun} in progress sees it at its next between-steps check and drains instead of
      * continuing to chain (see {@link LocalRun#drainOnShutdown()}) -- a graceful shutdown loses
-     * nothing already computed. The {@code executor.shutdown()} below does not interrupt the
-     * current step; it only stops new submissions, so that in-flight step (and, for a local run,
-     * its drain flush) gets to complete.
+     * nothing already computed.
+     *
+     * <p>The server is told the worker stopped polling, so its poll in progress returns without claiming
+     * more; the worker waits for that poll, at most its long-poll wait, and runs what it brought as
+     * in-flight work. The {@code executor.shutdown()} below does not interrupt the current step; it
+     * only stops new submissions, so that in-flight step (and, for a local run, its drain flush) gets to
+     * complete.
      */
     @Override
     public void close() {
         if (!running.compareAndSet(true, false)) return;
-        if (pollThread != null) pollThread.interrupt();
+        if (pollThread != null) stopPolling();
         awaitExecutor();          // in-flight runs flush their own handbacks while draining
         if (heartbeats != null) heartbeats.shutdownNow();
         if (outbox != null) outbox.close();
+    }
+
+    /** Ends the poll in progress on the server and waits for it; interrupts it when the server does not answer in time. */
+    private void stopPolling() {
+        try {
+            client.stopPolling(workerId);
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.DEBUG, () -> "worker " + workerId + ": stopPolling failed: " + e.getMessage());
+        }
+        synchronized (capacityFreed) {
+            capacityFreed.notifyAll();   // a saturated poll loop sees running is false
+        }
+        if (Thread.currentThread() == pollThread) return;
+        try {
+            pollThread.join(options.longPollWait().toMillis() + 1_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (pollThread.isAlive()) pollThread.interrupt();
     }
 
     private void awaitExecutor() {

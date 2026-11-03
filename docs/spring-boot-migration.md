@@ -162,7 +162,7 @@ Tomcat, before Boot):
 | Start until `/v1/HealthCheck` answers, H2 in memory | 523–814 ms | 1,584–1,653 ms | 858–876 ms with the CDS archive |
 | The same on PostgreSQL 16 | 843–868 ms | 1,682–1,738 ms | |
 | The image, process start to ready | | 1.7 s | 0.82–0.97 s |
-| Test suite, `./gradlew test --rerun` | 111 s | 145 s | 145 s |
+| Test suite, `./gradlew test --rerun` | 111 s | 145 s | 145 s; 124 s once a closing worker ends its polls (`StopPolling`) |
 
 The image's class-data-sharing archive is made in a stage of its own on the runtime image, since an
 archive only loads on the JVM that wrote it; it adds 46 MB. The suite's time is nearly all the start-up

@@ -40,6 +40,7 @@ public final class ControlPlane {
     public static final Method REPORT_STEPS = new Method("ReportSteps");
     public static final Method FAIL_TASK = new Method("FailTask");
     public static final Method HEARTBEAT_TASK = new Method("HeartbeatTask");
+    public static final Method STOP_POLLING = new Method("StopPolling");
     public static final Method POLL_EVENTS = new Method("PollEvents");
     public static final Method ACK_EVENTS = new Method("AckEvents");
     public static final Method GET_STEP_STATS = new Method("GetStepStats");
@@ -50,7 +51,7 @@ public final class ControlPlane {
             HEALTH_CHECK, GET_CLUSTER, LIST_WORKFLOWS, GET_BACKLOG_COVERAGE, REGISTER_WORKFLOW, GET_WORKFLOW,
             START_INSTANCE, LIST_INSTANCES, GET_INSTANCE, CANCEL_INSTANCE, SIGNAL_INSTANCE,
             CREATE_SCHEDULE, LIST_SCHEDULES, DELETE_SCHEDULE,
-            POLL_TASKS, REPORT_STEPS, FAIL_TASK, HEARTBEAT_TASK,
+            POLL_TASKS, REPORT_STEPS, FAIL_TASK, HEARTBEAT_TASK, STOP_POLLING,
             POLL_EVENTS, ACK_EVENTS, GET_STEP_STATS, SEARCH_INSTANCES);
 
     public static final Map<String, Method> BY_NAME =

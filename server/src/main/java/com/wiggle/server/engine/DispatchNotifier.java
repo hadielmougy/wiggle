@@ -170,6 +170,10 @@ final class DispatchNotifier {
         /** Whether the last await returned on a signal that no claim has spent and no forgo handed on. */
         private boolean signaled;
         private boolean closed;
+        /** Set by {@link #cancel}, from any thread; guarded by the notifier's lock. */
+        private boolean cancelled;
+        /** The poll's place in its line while it is parked; guarded by the notifier's lock. */
+        private Waiter parkedAs;
 
         private Watch(Interest interest, Line line, int capacity, FallbackPollPolicy.Schedule fallback) {
             this.interest = interest;
@@ -208,6 +212,17 @@ final class DispatchNotifier {
             return got;
         }
 
+        /** Ends the poll's waiting, from any thread: a parked await returns false at once, and so does every later one. */
+        void cancel() {
+            lock.lock();
+            try {
+                cancelled = true;
+                if (parkedAs != null) parkedAs.wake.signal();
+            } finally {
+                lock.unlock();
+            }
+        }
+
         /** The poll will not claim after all: hands on the wake that last woke it, if one did. */
         void forgo() {
             if (!signaled) return;
@@ -218,12 +233,15 @@ final class DispatchNotifier {
         private boolean awaitSignal(long fallbackMillis, long deadline) {
             lock.lock();
             try {
+                if (cancelled) return false;
                 if (line.signals > seen) return true;
                 Waiter me = new Waiter(lock.newCondition(), capacity);
                 line.parked.addLast(me);
+                parkedAs = me;
                 long frontSince = -1;
                 try {
                     while (!me.woken) {
+                        if (cancelled) return false;
                         long now = System.currentTimeMillis();
                         long waitMillis = deadline - now;
                         if (line.parked.peekFirst() == me) {
@@ -235,6 +253,7 @@ final class DispatchNotifier {
                     }
                     return true;
                 } finally {
+                    parkedAs = null;
                     if (!me.woken) {
                         boolean wasFront = line.parked.peekFirst() == me;
                         line.parked.remove(me);

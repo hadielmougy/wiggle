@@ -5,6 +5,8 @@ import com.wiggle.server.store.ClaimFilter;
 import com.wiggle.server.store.StorageUnreachableException;
 
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
 
@@ -32,6 +34,14 @@ final class Dispatch {
     private final long dispatchLingerMillis = ServerEnv.envLong("WIGGLE_DISPATCH_LINGER_MILLIS", 5);
     /** Where the next claim starts, so polls spread over the instance shards. */
     private final AtomicInteger nextShard = new AtomicInteger();
+    /** The polls in progress, by the worker each serves. */
+    private final ConcurrentHashMap<String, Set<ActivePoll>> active = new ConcurrentHashMap<>();
+
+    /** One poll in progress: whether its worker stopped polling, and the watch it waits on once it has one. */
+    private static final class ActivePoll {
+        volatile boolean stopped;
+        volatile DispatchNotifier.Watch watch;
+    }
 
     Dispatch(Transactions transactions, Tokens tokens, DispatchNotifier notifier,
              PollerRegistry pollers, long defaultLeaseMillis) {
@@ -44,14 +54,45 @@ final class Dispatch {
     }
 
     /**
-     * Long-polls for work. {@code cancelled} lets the caller (the API layer) signal that the worker's
-     * request is gone -- a closing or dead worker whose call was cancelled -- so we do not claim a
+     * Long-polls for work. {@code callerGone} lets the caller (the API layer) signal that the worker's
+     * request is gone, and {@link #stopPolling} that the worker stopped polling, so we do not claim a
      * token for a worker that will never run it (which would only strand it until lease expiry). This
      * matters with wake-on-produce: a signal can wake a parked poll the instant its worker is shutting
      * down, and the freshly-produced token should go to a live worker instead.
      */
     List<TaskActivation> poll(String workerId, ClaimFilter filter,
-                              int max, Long leaseMillis, long deadline, Cancellation cancelled) {
+                              int max, Long leaseMillis, long deadline, Cancellation callerGone) {
+        ActivePoll self = new ActivePoll();
+        active.computeIfAbsent(workerId, k -> ConcurrentHashMap.newKeySet()).add(self);
+        try {
+            return poll(workerId, filter, max, leaseMillis, deadline, () -> self.stopped || callerGone.cancelled(), self);
+        } finally {
+            active.computeIfPresent(workerId, (k, polls) -> {
+                polls.remove(self);
+                return polls.isEmpty() ? null : polls;
+            });
+        }
+    }
+
+    /**
+     * Ends every poll in progress for {@code workerId}: each returns what it has claimed, which is nothing
+     * unless it claimed before this, and claims no more. Answers how many there were.
+     */
+    int stopPolling(String workerId) {
+        Set<ActivePoll> polls = active.get(workerId);
+        if (polls == null) return 0;
+        int n = 0;
+        for (ActivePoll p : polls) {
+            p.stopped = true;
+            DispatchNotifier.Watch w = p.watch;
+            if (w != null) w.cancel();
+            n++;
+        }
+        return n;
+    }
+
+    private List<TaskActivation> poll(String workerId, ClaimFilter filter, int max, Long leaseMillis, long deadline,
+                                      Cancellation cancelled, ActivePoll self) {
         pollers.seen(workerId, filter, System.currentTimeMillis());
         if (cancelled.cancelled()) {
             return List.of();
@@ -61,6 +102,9 @@ final class Dispatch {
 
         FallbackPollPolicy.Schedule fallback = fallbackPolicy.schedule(workerId, filter);
         try (DispatchNotifier.Watch watch = notifier.watch(filter, max, fallback)) {
+            self.watch = watch;
+            if (self.stopped) watch.cancel();
+            if (cancelled.cancelled()) return List.of();
             List<TaskActivation> tasks = watch.claim(() -> claimNow(workerId, filter, max, lease), isFull);
 
             while (tasks.isEmpty() && System.currentTimeMillis() < deadline) {

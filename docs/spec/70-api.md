@@ -34,9 +34,9 @@ layer MUST map to `400 INVALID_ARGUMENT`. An unknown method MUST answer `404`, a
 **WGL-API-004** (MUST) Long-polling RPCs (`PollTasks`, `PollEvents`) MUST clamp the caller's requested
 wait to the server's maximum.
 
-**WGL-API-005** (MUST) A `PollTasks` interrupted because its server is stopping MUST NOT claim work.
-A worker that disconnects while its poll is parked is not seen: what the poll then claims returns to
-`READY` when its lease expires.
+**WGL-API-005** (MUST) A `PollTasks` interrupted because its server is stopping MUST NOT claim work,
+and neither may one whose worker has called `StopPolling`. A worker that disconnects without it while its
+poll is parked is not seen: what the poll then claims returns to `READY` when its lease expires.
 
 **WGL-API-006** (*withdrawn*, by [§11](#11-per-rpc-authorization)) There MUST be no per-RPC
 authorization. TLS (optionally mTLS) authenticates the channel; any trusted peer may call any RPC.
@@ -139,6 +139,7 @@ expression evaluated in UTC.
 | `ReportSteps` | `ReportStepsRequest{runs[]}` → `ReportStepsResult{results[]}` |
 | `FailTask` | `TaskFailureRequest{taskId, leaseOwner, message, retryable}` → `Ack` |
 | `HeartbeatTask` | `HeartbeatRequest{taskId, leaseOwner, extendMillis}` → `HeartbeatResult{leaseExpiresAt}` |
+| `StopPolling` | `StopPollingRequest{workerId}` → `StopPollingResult{stopped}` |
 | `GetBacklogCoverage` | `BacklogCoverageRequest{max}` → `BacklogCoverage{slices[], livePollers}` |
 
 **WGL-API-050** (MUST) An empty `versions` list MUST mean "serve every version"; a non-empty one MUST
@@ -175,7 +176,13 @@ say "A applied, B did not".
 that is false when no worker polling **this node** serves that queue at that version. `livePollers` MUST
 be this node's count.
 
-*Verified by:* `tests/BacklogCoverageTest`, `server/engine/AdvanceManyTest`, `tests/MemoryPollTest`.
+**WGL-API-060** (MUST) `StopPolling` MUST end every `PollTasks` in progress for `workerId` on the node
+that serves it: each returns at once with what it had already claimed, which is nothing unless it claimed
+before the call, and claims no more. `stopped` MUST be how many there were. It does not stop the worker
+from polling again.
+
+*Verified by:* `tests/BacklogCoverageTest`, `server/engine/AdvanceManyTest`, `tests/MemoryPollTest`,
+`server/engine/StopPollingTest`, `tests/WorkerCloseTest`.
 
 ## 7. Step statistics
 
@@ -316,6 +323,7 @@ the RPC reads anything. `HealthCheck` MUST need no credential.
 | `CancelInstance`, `SignalInstance` | `instance.cancel` / `instance.signal` `:<the instance's workflow>` |
 | `CreateSchedule`, `DeleteSchedule` | `schedule.write:<workflow>` |
 | `PollTasks` | `task.poll:<queue>` for each queue it names; `task.poll` when it names none (every queue) |
+| `StopPolling` | `task.poll` on any scope |
 | `ReportSteps`, `FailTask`, `HeartbeatTask` | `task.poll:<the task's queue>`; a task on a queue the caller may not poll is answered as not found (a run in `ReportSteps` gets 404) |
 | `PollEvents`, `AckEvents` | `event.read` |
 | `SearchInstances` | `read` on any scope; the hits are narrowed to the workflows it may read |
@@ -410,6 +418,7 @@ an integer is a JSON number with no fraction.
 | `ReportSteps` | `ReportStepsRequest` | `ReportStepsResult` |
 | `FailTask` | `TaskFailureRequest` | `Ack` |
 | `HeartbeatTask` | `HeartbeatRequest` | `HeartbeatResult` |
+| `StopPolling` | `StopPollingRequest` | `StopPollingResult` |
 | `PollEvents` | `PollEventsRequest` | `EventList` |
 | `AckEvents` | `AckEventsRequest` | `Ack` |
 | `GetStepStats` | `StepStatsRequest` | `StepStats` |
@@ -921,6 +930,18 @@ No fields: `{}`.
 | Field | Type | Notes |
 |---|---|---|
 | `leaseExpiresAt` | integer |  |
+
+### StopPollingRequest
+
+| Field | Type | Notes |
+|---|---|---|
+| `workerId` | string | required |
+
+### StopPollingResult
+
+| Field | Type | Notes |
+|---|---|---|
+| `stopped` | integer | the polls in progress it ended |
 
 ### PollEventsRequest
 

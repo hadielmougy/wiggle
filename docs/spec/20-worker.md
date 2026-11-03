@@ -200,7 +200,9 @@ reporting a single run MUST surface the refusal as an error carrying that status
 begins.
 
 **WGL-WRK-081** (MUST) `close()` MUST stop polling, let in-flight steps finish, and MUST NOT interrupt
-a running handler.
+a running handler. It MUST call `StopPolling` and wait for its poll in progress to return, at most its
+long-poll wait, running what that poll brought as in-flight work, so it leaves nothing claimed on the
+server that it will not run. A server that does not answer is waited out, and the poll then interrupted.
 
 **WGL-WRK-082** (MUST) `close()` MUST cause an in-flight local run to **drain** — flush its buffered
 steps with a forced handback — instead of continuing to chain, so a graceful shutdown loses nothing
@@ -209,7 +211,7 @@ already computed.
 **WGL-WRK-083** (MUST) A worker crash MUST lose at most the current step (`SERVER`, `LOCAL_SYNC`) or
 the current local batch (`LOCAL_ASYNC`), recovered by lease expiry.
 
-*Verified by:* `tests/GracefulShutdownTest`, `tests/ServerShutdownTest`.
+*Verified by:* `tests/GracefulShutdownTest`, `tests/ServerShutdownTest`, `tests/WorkerCloseTest`.
 
 ## 7. Tuning
 

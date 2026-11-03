@@ -61,6 +61,7 @@ public final class ControlPlaneApi {
         bind(ControlPlane.LIST_SCHEDULES, this::listSchedules);
         bind(ControlPlane.DELETE_SCHEDULE, this::deleteSchedule);
         bind(ControlPlane.POLL_TASKS, this::pollTasks);
+        bind(ControlPlane.STOP_POLLING, this::stopPolling);
         bind(ControlPlane.REPORT_STEPS, this::reportSteps);
         bind(ControlPlane.FAIL_TASK, this::failTask);
         bind(ControlPlane.HEARTBEAT_TASK, this::heartbeatTask);
@@ -335,6 +336,12 @@ public final class ControlPlaneApi {
         Msg out = Msg.create();
         for (com.wiggle.core.TaskActivation t : tasks) out.add("tasks", taskMsg(t));
         return out;
+    }
+
+    Msg stopPolling(Msg req) throws Exception {
+        authz.requireAny(Permissions.TASK_POLL);
+        if (req.str("workerId").isBlank()) throw EngineException.badRequest("workerId is required");
+        return Msg.create().put("stopped", engine.stopPolling(req.str("workerId")));
     }
 
     Msg failTask(Msg req) throws Exception {
