@@ -1,14 +1,13 @@
 package com.wiggle.order;
 
 
+import com.wiggle.boot.WiggleNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.ExecutionMode;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -59,7 +58,7 @@ public final class Benchmark {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(30),
                 Duration.ofMillis(200), Duration.ofHours(1), 100, 0);
 
-        try (WiggleServer server = open(config, jdbcUrl);
+        try (WiggleNode server = open(config, jdbcUrl);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
 
@@ -88,12 +87,12 @@ public final class Benchmark {
 
     /** In-memory with no URL; else JdbcStorage with the dialect picked from the URL (postgres / h2).
      *  Storage is an explicit factory (no ServiceLoader), so the benchmark wires it here. */
-    static WiggleServer open(ServerConfig config, String jdbcUrl) throws Exception {
-        if (jdbcUrl == null) return new WiggleServer(config, new PostgresStorageFactory()).start();
+    static WiggleNode open(ServerConfig config, String jdbcUrl) throws Exception {
+        if (jdbcUrl == null) return WiggleNode.start(config);
         com.wiggle.jdbc.Dialect dialect = jdbcUrl.startsWith("jdbc:postgresql")
                 ? new com.wiggle.postgres.PostgresDialect() : new com.wiggle.postgres.H2Dialect();
-        return new WiggleServer(config, cfg -> new com.wiggle.jdbc.JdbcStorage(
-                cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), dialect)).start();
+        return WiggleNode.start(config, cfg -> new com.wiggle.jdbc.JdbcStorage(
+                cfg.jdbcUrl(), cfg.jdbcUser(), cfg.jdbcPassword(), cfg.jdbcPoolSize(), dialect));
     }
 
     /** The longest pipeline this benchmark can build -- one declared step method per hop. */

@@ -3,7 +3,7 @@ package com.wiggle.tests;
 import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.dist.WiggleStorageFactory;
+import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageException;
@@ -82,7 +82,7 @@ class StorageFailureStatusTest {
         System.setProperty("wiggle.rpc.maxAttempts", "2");
         System.setProperty("wiggle.rpc.retryDelayMillis", "1");
         ServerConfig config = config(TestStorage.url("storage-status"));
-        FlakyStorage storage = new FlakyStorage(new WiggleStorageFactory().create(config));
+        FlakyStorage storage = new FlakyStorage(new PostgresStorageFactory().create(config));
         try (WiggleTestServer server = WiggleTestServer.start(config, c -> storage);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(spec());

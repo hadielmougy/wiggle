@@ -6,7 +6,6 @@ import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.api.ApiServlet;
-import com.wiggle.server.http.TomcatTls;
 import com.wiggle.server.store.StorageFactory;
 import org.apache.coyote.http2.Http2Protocol;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -17,7 +16,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 
-import java.io.IOException;
 
 /**
  * The node: its settings, its store and its parts, and the API servlet on the web server's port. A
@@ -50,8 +48,8 @@ class NodeConfiguration {
     }
 
     @Bean(initMethod = "start", destroyMethod = "close")
-    WiggleServer wiggleServer(ServerConfig config, StorageFactory storageFactory) throws IOException {
-        return WiggleServer.withoutHttpServers(config, storageFactory);
+    WiggleServer wiggleServer(ServerConfig config, StorageFactory storageFactory) {
+        return new WiggleServer(config, storageFactory);
     }
 
     @Bean

@@ -9,7 +9,6 @@ include(
     "client",
     "client-all",
     "bom",
-    "dist",
     "boot",
     "example",
     "example-claude",

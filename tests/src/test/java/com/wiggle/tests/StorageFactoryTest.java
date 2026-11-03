@@ -1,7 +1,6 @@
 package com.wiggle.tests;
 
 import com.wiggle.core.InstanceStatus;
-import com.wiggle.dist.WiggleStorageFactory;
 import com.wiggle.jdbc.JdbcStorage;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
@@ -33,7 +32,7 @@ class StorageFactoryTest {
 
     @Test @DisplayName("no URL yields an empty, migrated H2 database in memory")
     void inMemory() {
-        try (Storage s = new WiggleStorageFactory().create(config(null))) {
+        try (Storage s = new PostgresStorageFactory().create(config(null))) {
             assertInstanceOf(JdbcStorage.class, s);
             assertEquals(0, (int) TestTx.inHome(s, () -> Repositories.instances().countInstances(InstanceStatus.RUNNING)), "migrated and empty");
         }
@@ -42,7 +41,7 @@ class StorageFactoryTest {
     @Test @DisplayName("a jdbc:h2 URL yields a working JDBC store (the H2 dialect branch, end to end)")
     void h2Jdbc() {
         String url = "jdbc:h2:mem:sf-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        try (Storage s = new WiggleStorageFactory().create(config(url))) {
+        try (Storage s = new PostgresStorageFactory().create(config(url))) {
             assertTrue(s.getClass().getName().contains("JdbcStorage"), s.getClass().getName());
             s.migrate();   // proves the dialect was selected correctly and the store is usable
         }
@@ -51,24 +50,9 @@ class StorageFactoryTest {
     @Test @DisplayName("an unrecognised URL scheme fails fast with a helpful message")
     void unknownScheme() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> new WiggleStorageFactory().create(config("jdbc:db2://localhost/nope")));
+                () -> new PostgresStorageFactory().create(config("jdbc:db2://localhost/nope")));
         assertTrue(e.getMessage().contains("jdbc:db2://localhost/nope"), e.getMessage());
         assertTrue(e.getMessage().contains("no storage backend"), e.getMessage());
-    }
-
-    @Test @DisplayName("the published factory is the same mapping the distribution runs")
-    void theDistributionDelegatesRatherThanDuplicating() {
-        // The mapping lives in the published postgres module so an embedding app can have it;
-        // dist keeps the name its image and docs already use. If someone re-implements one of
-        // them, an app and the image would select storage differently for the same URL.
-        assertTrue(PostgresStorageFactory.class.isAssignableFrom(WiggleStorageFactory.class),
-                "WiggleStorageFactory must remain PostgresStorageFactory under another name");
-
-        String url = "jdbc:h2:mem:sf-rel-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
-        try (Storage a = new PostgresStorageFactory().create(config(url));
-             Storage b = new WiggleStorageFactory().create(config(url))) {
-            assertEquals(a.getClass(), b.getClass(), "same URL, same store type");
-        }
     }
 
     @Test @DisplayName("an unknown scheme names what is supported, from the published class too")

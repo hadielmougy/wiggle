@@ -26,7 +26,7 @@ storage:
 service:
   type: ClusterIP
   apiPort: 8080      # the HTTP control plane
-  healthPort: 8090   # serves the always-open /healthz probe
+  healthPort: 8090   # Actuator's probes: /healthz, /healthz/liveness, /healthz/readiness
   portalPort: 8070   # the web portal; 0 = off. Without WIGGLE_DASHBOARD_PASSWORD, its first visit sets the admin password
 
 # Extra environment: any WIGGLE_* tunable, TLS, the portal password, etc.
@@ -62,7 +62,7 @@ securityContext:
 
 livenessProbe:
   httpGet:
-    path: /healthz
+    path: /healthz/liveness
     port: health
   initialDelaySeconds: 15
   periodSeconds: 15
@@ -70,7 +70,7 @@ livenessProbe:
   failureThreshold: 3
 readinessProbe:
   httpGet:
-    path: /healthz
+    path: /healthz/readiness
     port: health
   initialDelaySeconds: 5
   periodSeconds: 5

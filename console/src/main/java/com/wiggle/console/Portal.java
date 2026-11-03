@@ -1,6 +1,5 @@
 package com.wiggle.console;
 
-import com.wiggle.core.Tls;
 import com.wiggle.server.WiggleServer;
 import com.wiggle.server.auth.Accounts;
 import com.wiggle.server.auth.AuthCache;
@@ -8,12 +7,11 @@ import com.wiggle.server.auth.AuthCache;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 /**
- * The portal: the dashboard SPA and its JSON API, served by a server process over its own engine
- * on {@code WIGGLE_PORTAL_PORT}, separate from the API port.
+ * The portal: the dashboard SPA and its JSON API, which the application serves over the node's own
+ * engine on {@code WIGGLE_PORTAL_PORT}, separate from the API port.
  *
  * <p>Built-in accounts come from {@code WIGGLE_DASHBOARD_USER} / {@code WIGGLE_DASHBOARD_PASSWORD} and
  * the optional read-only {@code WIGGLE_DASHBOARD_VIEWER_*} pair. Every other account, role and
@@ -21,31 +19,14 @@ import java.util.Set;
  * users file at {@code WIGGLE_CONSOLE_USERS_FILE} from before is imported once and then no longer
  * read.
  */
-public final class Portal implements AutoCloseable {
+public final class Portal {
 
     public static final String PORT_ENV = "WIGGLE_PORTAL_PORT";
     /** The port the portal serves on when {@value #PORT_ENV} is unset. */
     public static final int DEFAULT_PORT = 8070;
     private static final System.Logger LOG = System.getLogger(Portal.class.getName());
 
-    private final ConsoleServer http;
-
-    private Portal(ConsoleServer http) {
-        this.http = http;
-    }
-
-    /**
-     * Starts the portal for {@code server} on {@value #PORT_ENV}, or {@value #DEFAULT_PORT} when it is
-     * unset; {@code 0} turns it off.
-     */
-    public static Optional<Portal> fromEnvironment(WiggleServer server, Tls.Options tls, Map<String, String> env) {
-        int port = port(env);
-        if (port <= 0) return Optional.empty();
-        Web web = web(server, tls.hasKeyStore(), env);
-        Portal portal = new Portal(new ConsoleServer(web.servlet(), web.filter(), port, tls).start());
-        web.warnIfSetupRequired(tls.hasKeyStore(), portal.port());
-        return Optional.of(portal);
-    }
+    private Portal() {}
 
     /**
      * The portal's servlet, for {@code /*}, and the sign-in filter in front of it, for a web server to
@@ -111,15 +92,6 @@ public final class Portal implements AutoCloseable {
         }
         LOG.log(System.Logger.Level.WARNING, () -> "accounts live on the auth shard; " + file
                 + " is no longer read and can be removed");
-    }
-
-    /** The port it is listening on. */
-    public int port() {
-        return http.port();
-    }
-
-    @Override public void close() {
-        http.close();
     }
 
     private static String get(Map<String, String> env, String key, String def) {

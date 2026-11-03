@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":server"))
     implementation(project(":postgres"))   // H2 in memory for Scenarios
     implementation(project(":test-fixtures"))
+    implementation(testFixtures(project(":boot")))   // Scenarios run on nodes of the Boot application
 
     testImplementation(project(":client"))
     testImplementation(project(":server"))
@@ -14,14 +15,10 @@ dependencies {
     // :postgres supplies both dialects -- PostgreSQL, and H2 for the runs with nothing installed.
     testImplementation(project(":jdbc"))
     testImplementation(project(":postgres"))
-    testImplementation(testFixtures(project(":boot")))   // @WiggleBootTest, WiggleTestNodes
     // TutorialTest runs the tutorial's own program, so the fixture it quotes is the code under
     // test rather than a copy of it. :example depends only on :client/:server/:jdbc/:postgres,
     // all of which are already here, so this adds no new edge to the graph.
     testImplementation(project(":example"))
-    // The dist module supplies the explicit WiggleStorageFactory used to run a WiggleServer against
-    // a real database in tests (the same one the standalone image uses).
-    testImplementation(project(":dist"))
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

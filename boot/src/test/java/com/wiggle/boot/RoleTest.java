@@ -1,4 +1,4 @@
-package com.wiggle.dist;
+package com.wiggle.boot;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -1,13 +1,12 @@
 package com.wiggle.order;
 
+import com.wiggle.boot.WiggleNode;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.console.Portal;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
 import java.util.Map;
@@ -70,8 +69,9 @@ public final class DashboardSeed {
                 .thenApply(s::gather)
                 .thenApply(s::render));
 
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
-             Portal portal = Portal.fromEnvironment(server, config.tls(), System.getenv()).orElseThrow();
+        int portal = Portal.port(System.getenv());
+        if (portal <= 0) throw new IllegalStateException("the seed is for the portal; leave WIGGLE_PORTAL_PORT unset or set a port");
+        try (WiggleNode server = WiggleNode.start(config, null, Map.of("WIGGLE_PORTAL_PORT", portal));
              WiggleClient client = new WiggleClient(server.baseUrl());
              Worker worker = new Worker(client, "seed-worker")
                      .registerHandler(new OnboardingHandlers())
@@ -92,7 +92,7 @@ public final class DashboardSeed {
             client.createSchedule("kyc-checks", Duration.ofHours(6), Map.of("source", "timer"));
 
             System.out.println("\nData seeded on the server at " + server.baseUrl() + ".");
-            System.out.println("Explore it in the portal: http://localhost:" + portal.port()
+            System.out.println("Explore it in the portal: http://localhost:" + portal
                     + " (the first visit sets the admin password, unless WIGGLE_DASHBOARD_PASSWORD did)");
             System.out.println("Two 'onboarding' instances are parked on the 'manager-approval' signal.");
             System.out.println("Press Ctrl-C to stop.\n");

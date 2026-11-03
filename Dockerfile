@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
-# Wiggle standalone server image. Self-contained: the build stage compiles the Java modules
-# and the ClojureScript dashboard (needs Node), then the runtime stage ships only a JRE plus
-# the assembled distribution.
+# Wiggle server image. Self-contained: the build stage compiles the Java modules and the
+# ClojureScript dashboard (needs Node) into the Spring Boot jar, then the runtime stage ships only a
+# JRE plus that jar.
 #
 #   docker build -t ghcr.io/hadielmougy/wiggle:0.0.5 .
 #   docker run --rm -p 8080:8080 -p 8090:8090 ghcr.io/hadielmougy/wiggle:0.0.5      # in-memory
@@ -39,25 +39,25 @@ WORKDIR /src
 COPY dashboard-ui/package.json dashboard-ui/package-lock.json ./dashboard-ui/
 RUN cd dashboard-ui && (npm ci || npm install)
 
-# Then the rest of the sources and the full build (compiles Java + dashboard, assembles the dist).
-# The :dist module bundles every storage backend; the engine is picked from the URL at runtime.
+# Then the rest of the sources and the full build (compiles Java + dashboard into the Boot jar).
+# The storage backend is picked from the URL at runtime.
 COPY . .
 RUN chmod +x gradlew \
- && ./gradlew --no-daemon --console=plain :dist:installDist
-# -> /src/dist/build/install/wiggle-server/{bin,lib}
+ && ./gradlew --no-daemon --console=plain :boot:bootJar \
+ && cp boot/build/libs/wiggle-server-*.jar /src/wiggle-server.jar
 
 # ---- runtime stage: distroless (glibc, no shell, non-root) ----
 # gcr.io/distroless/java21-debian12 ships only a JRE on a minimal glibc base — no shell, no package
 # manager, a tiny CVE surface — and the :nonroot tag runs as an unprivileged NUMERIC uid (65532), so
 # the image satisfies a `runAsNonRoot: true` admission policy with no extra config. There is no
-# shell, so we launch the JVM directly (not the generated bin/wiggle script) and copy only lib/;
-# health is a Kubernetes httpGet probe on /healthz (see deploy/helm), not a shell HEALTHCHECK.
+# shell, so we launch the JVM directly on the jar; health is a Kubernetes httpGet probe on
+# /healthz/liveness and /healthz/readiness (see deploy/helm), not a shell HEALTHCHECK.
 FROM gcr.io/distroless/java21-debian12:nonroot AS runtime
 
 WORKDIR /opt/wiggle
-COPY --from=build /src/dist/build/install/wiggle-server/lib ./lib
+COPY --from=build /src/wiggle-server.jar ./wiggle-server.jar
 
-# HTTP control plane, the port that serves the always-open /healthz probe, and the portal
+# HTTP control plane, the probe port (Actuator's /healthz, /healthz/liveness, /healthz/readiness), and the portal
 # (WIGGLE_PORTAL_PORT, default 8070; 0 turns it off). Storage defaults to in-memory; set
 # WIGGLE_JDBC_URL to run against PostgreSQL. Secure the portal with WIGGLE_DASHBOARD_PASSWORD and
 # turn on TLS with WIGGLE_TLS_KEYSTORE (see the README).
@@ -67,4 +67,4 @@ EXPOSE 8080 8070 8090
 
 USER 65532:65532
 # MaxRAMPercentage lets the JVM size its heap from the container memory limit (cgroup-aware).
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-cp", "/opt/wiggle/lib/*", "com.wiggle.dist.Main"]
+ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75.0", "-jar", "/opt/wiggle/wiggle-server.jar"]

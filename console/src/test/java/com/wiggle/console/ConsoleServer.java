@@ -1,33 +1,26 @@
 package com.wiggle.console;
 
-import com.wiggle.core.Tls;
-import com.wiggle.server.http.TomcatTls;
 import org.apache.catalina.Context;
 import org.apache.catalina.connector.Connector;
 import org.apache.catalina.startup.Tomcat;
 import org.apache.tomcat.util.descriptor.web.FilterDef;
 import org.apache.tomcat.util.descriptor.web.FilterMap;
 
-/**
- * The console's embedded Tomcat: one {@link DashboardServlet} mapped to {@code /*} behind an
- * {@link AuthFilter}, serving the dashboard SPA + JSON API. Plaintext by default; HTTPS (and mTLS when a
- * truststore is set) when the {@link Tls.Options} carries a keystore.
- */
+/** A Tomcat of its own for the portal's servlet and sign-in filter, so a test can drive them over HTTP. */
 final class ConsoleServer implements AutoCloseable {
 
     private final Tomcat tomcat;
 
-    ConsoleServer(DashboardData data, ConsoleAuth auth, int port, Tls.Options tls) {
-        this(new DashboardServlet(data, auth), new AuthFilter(auth), port, tls);
+    ConsoleServer(DashboardData data, ConsoleAuth auth, int port) {
+        this(new DashboardServlet(data, auth), new AuthFilter(auth), port);
     }
 
-    ConsoleServer(DashboardServlet servlet, AuthFilter filter, int port, Tls.Options tls) {
+    ConsoleServer(DashboardServlet servlet, AuthFilter filter, int port) {
         this.tomcat = new Tomcat();
         this.tomcat.setBaseDir(System.getProperty("java.io.tmpdir"));
 
         Connector connector = new Connector("HTTP/1.1");
         connector.setPort(port);
-        if (tls.hasKeyStore()) TomcatTls.configure(connector, tls);
         tomcat.setConnector(connector);
 
         Context ctx = tomcat.addContext("", null);

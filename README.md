@@ -8,8 +8,8 @@
 ### Durable workflows. 
 
 **Describe a process as a graph. Wiggle runs it as a durable state machine that survives
-crashes, waits for humans, and retries failures — with a server you can embed, and workers in
-the language you already use.**
+crashes, waits for humans, and retries failures — with a server that runs as one container or a
+cluster, and workers in the language you already use.**
 
 [![Maven Central](https://img.shields.io/maven-central/v/sh.wiggle/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/sh.wiggle/wiggle-client)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-hadielmougy%2Fwiggle-2496ed)](https://hub.docker.com/r/hadielmougy/wiggle)
@@ -149,29 +149,24 @@ the [onboarding guide](docs/onboarding.md).
 
 ## 2. Deployment & running options
 
-One codebase, three postures — start embedded, grow into a cluster, **without rewriting your workflows**.
+The server is a Spring Boot application: the Docker image, the release archive, or `./gradlew
+:boot:bootRun` from source. One codebase, two postures — start with one node, grow into a cluster,
+**without rewriting your workflows**.
 
 | Mode | What it is |
 |---|---|
-| **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store |
-| **Standalone server** | one node, HTTP API `:8080`, in-memory or a database |
+| **Single node** | HTTP API `:8080`, an H2 database in memory or PostgreSQL |
 | **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery |
 
-### 2.1 Embedded — one JVM, zero infrastructure
+### 2.1 A server for development and tests
 
-The server is a library. No database configured means an H2 database in memory — perfect for tests:
-
-```java
-try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
-     WiggleClient client = new WiggleClient(server.baseUrl())) {
-    // register flow specs, run workers, start instances — all in-process
-}
-```
+No database configured means an H2 database in memory, so a throwaway server is one command —
+the Docker run from section 1, or `./gradlew :boot:bootRun` in this repository.
 
 ### 2.2 Standalone server & cluster
 
 ```bash
-./gradlew :dist:run        # single node, in-memory, API on :8080
+./gradlew :boot:bootRun    # single node, H2 in memory, API on :8080
 ```
 
 Or **download the pre-built distribution** from the [GitHub release](https://github.com/hadielmougy/wiggle/releases)
@@ -248,14 +243,12 @@ by the handler's own clock and how long it waited to be claimed, slowest first.
 
 ## 3. Example in Java
 
-The fastest end-to-end: an embedded server, one worker, one instance — one JVM.
+The fastest end-to-end: one worker and one instance, against the server from section 1 on `localhost:8080`.
 
 ```java
 import com.wiggle.client.flow.*;
 import com.wiggle.client.worker.*;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.*;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -277,9 +270,8 @@ interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
 
 FlowSpec greet = FlowSpec.define("greet", 1, Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
-// 3. Embedded server + worker + one instance.
-try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
-     WiggleClient client = new WiggleClient(server.baseUrl())) {
+// 3. A worker + one instance, on the server at localhost:8080.
+try (WiggleClient client = new WiggleClient("localhost:8080")) {
 
     try (Worker worker = new Worker(client, "worker-1")
             .registerHandler(new GreetHandlers())) {
@@ -446,7 +438,7 @@ class per recipe where the other is a topology file plus a handlers file.
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
 | **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; accounts and permission-set roles on the auth shard. |
-| **Distribution** | `dist` | The one runnable image: the server with the portal, every storage backend bundled. |
+| **Application** | `boot` | The one runnable: the server as a Spring Boot application, with the portal and Actuator's probes, every storage backend bundled. |
 
 **The mechanics that make it hold together:**
 
@@ -560,7 +552,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
-| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint |
+| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for Actuator's probes: **`/healthz`**, `/healthz/liveness`, `/healthz/readiness` |
 | `WIGGLE_PORTAL_PORT` | `8070` | port for the web **portal** (below); `0` turns it off |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
@@ -568,7 +560,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_SEARCH_ENABLED` | `false` | **full-text search** over instances on the one database; a topology gets it from a `search` shard (`WIGGLE_SEARCH_RETENTION_MILLIS`, `WIGGLE_SEARCH_WORKFLOWS`) |
 | `WIGGLE_API_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
-| `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
+| `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | also log to a rotating file; the level of Wiggle's own loggers |
 
 ### Portal
 
@@ -627,7 +619,6 @@ Suggestions and PRs welcome — open an issue.
 
 ```kotlin
 implementation("sh.wiggle:wiggle-client:0.0.10")     // DSL + worker + client
-implementation("sh.wiggle:wiggle-postgres:0.0.10")   // only to embed the server: storage, server included
 ```
 
 Prefer the **BOM** so every wiggle module stays version-aligned

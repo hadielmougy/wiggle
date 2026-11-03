@@ -542,7 +542,7 @@ becomes an RPC that the server then fans out, and the API surface lacks reads th
 (pending signals, [WGL-OPS-042a](90-ops.md)). The server already connects to every shard and its
 replicas, and the `DashboardData` seam already has an in-process adapter (`EngineDashboardData`).
 
-**Status: implemented.** The portal is the `console` module, started by `dist` when
+**Status: implemented.** The portal is the `console` module, served by the Boot application when
 `WIGGLE_PORTAL_PORT` is set, reading through `EngineDashboardData`. Sessions and permission checks
 are on the auth shard ([§13](#13-users-and-authorization)). WGL-SHARD-174 needs no code: a portal-only node is a server node workers
 are not pointed at.

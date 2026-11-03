@@ -9,7 +9,7 @@ alongside this page; run all nine end to end with:
 ./gradlew :example:runCookbook
 ```
 
-`CookbookDemo` starts an embedded server and one worker, registers every flow spec below and binds
+`CookbookDemo` starts a server in its own JVM and one worker, registers every flow spec below and binds
 its handlers, runs one instance of each, and prints the resulting context.
 
 For the operators combined into one larger scenario — a team of LLM agents, a critic loop and a human

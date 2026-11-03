@@ -18,11 +18,7 @@ import java.util.UUID;
  * ServiceLoader} lookup. {@code jdbc:postgresql:} gets the PostgreSQL dialect, {@code jdbc:h2:} the
  * H2 one, and no URL at all gets a new H2 database held in memory. A storage topology gets one such store per shard.
  *
- * <p>This lives here rather than in the runnable distribution because an application that
- * <em>embeds</em> the engine needs it too, and {@code dist} is not published. Everything it touches
- * already arrives with this module: {@code postgres} exposes {@code jdbc} as {@code api}, which
- * exposes {@code server}, so a single {@code sh.wiggle:wiggle-postgres} dependency is enough to
- * write {@code new WiggleServer(config, new PostgresStorageFactory())}.
+ * <p>The Boot application builds its store with it unless it is given another factory.
  *
  * <p>PostgreSQL is the supported deployment backend. H2 runs in PostgreSQL-compatibility mode and is
  * here for tests and local runs: it exercises the JDBC store, its migrations and the generic claim

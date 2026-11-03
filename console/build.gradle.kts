@@ -2,16 +2,18 @@ plugins {
     `java-library`
 }
 
-// The portal: the dashboard SPA and its JSON API on embedded Tomcat, served by a server process over
-// its own engine. Not published to Maven Central.
+// The portal: the dashboard SPA and its JSON API, a servlet and a filter the application serves over the
+// node's own engine. Not published to Maven Central.
 dependencies {
     api(project(":server"))
-    implementation("org.apache.tomcat.embed:tomcat-embed-core:${property("tomcatVersion")}")
+    // the application's Tomcat supplies the servlet API at runtime
+    compileOnly("jakarta.servlet:jakarta.servlet-api:${property("servletApiVersion")}")
 
     testImplementation(project(":client"))
     testImplementation(project(":test-fixtures"))
     testImplementation(project(":postgres"))   // H2 in memory for the servers under test
     testImplementation(testFixtures(project(":boot")))   // nodes of the Boot application
+    testImplementation("org.apache.tomcat.embed:tomcat-embed-core")   // ConsoleServer, a host for the servlet under test; Boot's version
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

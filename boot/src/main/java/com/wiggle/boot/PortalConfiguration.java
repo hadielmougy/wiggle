@@ -5,7 +5,6 @@ import com.wiggle.console.Portal;
 import com.wiggle.core.Settings;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.WiggleServer;
-import com.wiggle.server.http.TomcatTls;
 import jakarta.servlet.Filter;
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.http2.Http2Protocol;

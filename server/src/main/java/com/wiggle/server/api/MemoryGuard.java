@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.DoubleSupplier;
 
 /**
- * Memory-pressure admission control for the API server. {@link HttpApi} keeps this
+ * Memory-pressure admission control for the API server. {@link ApiServlet} keeps this
  * guard's running sum of the serialized bytes held by every in-flight request+response cycle; the
  * guard turns the JVM's GC-accurate heap utilization into a per-poll admit/reject decision. When
  * utilization crosses the configured threshold the server is under pressure and rejects a

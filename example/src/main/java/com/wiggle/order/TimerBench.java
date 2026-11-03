@@ -1,12 +1,12 @@
 package com.wiggle.order;
 
+import com.wiggle.boot.WiggleNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.ForFlow;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -68,7 +68,7 @@ public final class TimerBench {
         System.out.printf("timer bench: count=%d sleep=%dms tick=%dms batch=%d adaptive=%s parallelism=%s store=%s%n",
                 count, sleepMillis, tickMillis, batch, adaptive, parallelism, jdbcUrl == null ? "memory" : jdbcUrl);
 
-        try (WiggleServer server = Benchmark.open(config, jdbcUrl);
+        try (WiggleNode server = Benchmark.open(config, jdbcUrl);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(bp);
             for (int i = 0; i < count; i++) client.start(bp, Map.of("i", (long) i));

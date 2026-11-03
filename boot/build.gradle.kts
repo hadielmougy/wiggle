@@ -2,6 +2,7 @@ import org.springframework.boot.gradle.plugin.SpringBootPlugin
 
 plugins {
     id("org.springframework.boot")
+    application
     `java-test-fixtures`
 }
 
@@ -33,3 +34,23 @@ dependencies {
 springBoot {
     mainClass.set("com.wiggle.boot.WiggleApplication")
 }
+
+application {
+    mainClass.set("com.wiggle.boot.WiggleApplication")
+    applicationName = "wiggle"
+}
+
+// The runnable server: wiggle-server-<version>.jar, and the release archive wiggle-server-<version>.{tar,zip}
+// (bin/wiggle, lib/wiggle-server-<version>.jar) that bootDistTar and bootDistZip build.
+tasks.bootJar {
+    archiveBaseName.set("wiggle-server")
+}
+
+distributions {
+    named("boot") {
+        distributionBaseName.set("wiggle-server")
+    }
+}
+
+// Only Boot's distribution ships; the application plugin's own one of the plain jar does not.
+listOf("distTar", "distZip", "installDist", "startScripts").forEach { tasks.named(it) { enabled = false } }

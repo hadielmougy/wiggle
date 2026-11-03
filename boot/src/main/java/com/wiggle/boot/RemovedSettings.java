@@ -1,4 +1,4 @@
-package com.wiggle.dist;
+package com.wiggle.boot;
 
 import java.util.ArrayList;
 import java.util.List;

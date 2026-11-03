@@ -50,7 +50,10 @@ still behaves the same.
    (`@WiggleBootTest`, `WiggleTestNodes`, or `WiggleTestServer` on the test's own `ServerConfig`), except
    the four that test what phase 5 retires: `TlsTest`, `HealthzTest` and `ServerRoleTest` on a node's own
    servers, `PortalTest` on `Portal.fromEnvironment`. See the results below.
-5. Packaging: the image runs the Boot jar; `dist` and `HealthServer` are retired.
+5. Packaging: the image runs the Boot jar and the release archive is Boot's distribution; `dist`,
+   `HealthServer`, the node's own API server and the console's own Tomcat are retired. The server runs
+   as its own process: embedding it is no longer supported, and the examples and tests run the Boot
+   application in their JVM through `WiggleNode`. See the results below.
 6. Measure against the baselines below and tune; HTTP/2 between client and server.
 
 ## Baselines
@@ -119,4 +122,17 @@ stay plain JUnit on `PostgresStorageFactory.inMemory()`; a context would add a n
 The suite starts about 350 nodes, and nearly all the added time is their start-up. Each converted test
 still has a node of its own, as it had a server of its own. Sharing one node across a class's tests
 would save most of it, test by test, once each test is on queues of its own.
+
+## Phase 5 results
+
+PostgreSQL 16, `:example:bench`, steps per second, three interleaved runs each, against 1g, whose
+node still served its API on a Tomcat of its own:
+
+| Mode | 1g | Boot application |
+|---|---|---|
+| `SERVER`, 1,000 instances | 2,550–2,593 | 2,343–2,443 |
+| `LOCAL_ASYNC`, 6,000 instances | 28,294–29,389 | 26,853–27,643 |
+
+About 6% and 4% lower. Boot puts its servlet filters in front of every call, MVC's per-request
+observation among them; that is for phase 6 to measure and remove where the API does not need it.
 
