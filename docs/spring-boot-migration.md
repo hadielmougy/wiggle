@@ -54,7 +54,9 @@ still behaves the same.
    `HealthServer`, the node's own API server and the console's own Tomcat are retired. The server runs
    as its own process: embedding it is no longer supported, and the examples and tests run the Boot
    application in their JVM through `WiggleNode`. See the results below.
-6. Measure against the baselines below and tune; HTTP/2 between client and server.
+6. Measured against the baselines and tuned: Boot's per-request observation and form-content filters
+   are off, the image starts from a class-data-sharing archive, and HTTP/2 is the client's option, not
+   its default. See the results below.
 
 ## Baselines
 
@@ -135,4 +137,35 @@ node still served its API on a Tomcat of its own:
 
 About 6% and 4% lower. Boot puts its servlet filters in front of every call, MVC's per-request
 observation among them; that is for phase 6 to measure and remove where the API does not need it.
+
+## Phase 6 results
+
+`:example:bench`, 20 steps per instance, steps per second, interleaved runs against 1g (the node's own
+Tomcat, before Boot):
+
+| Storage, mode, instances | 1g | Boot, phase 5 | Boot, tuned |
+|---|---|---|---|
+| H2 in memory, `SERVER`, 6,000 | 8,775–10,142 | 8,851–9,794 | 9,704–10,305 |
+| PostgreSQL 16, `SERVER`, 1,000 | 2,511–2,634 | 2,343–2,498 | 2,433–2,474 |
+| PostgreSQL 16, `LOCAL_ASYNC`, 6,000 | 27,921–29,389 | 26,853–27,643 | 27,576–28,431 |
+
+- Per-request observations were most of the cost Boot added; with them and the form-content filter
+  off, H2 is level with 1g. On PostgreSQL `SERVER` stays about 3% lower: candidates are the library
+  upgrades Boot brings (Tomcat 11, HikariCP 7, pgjdbc 42.7.14) and the request-context filter.
+- HTTP/2 from the client was 3–5% slower than HTTP/1.1 on loopback, with 5 or 16 HTTP clients, so the
+  client stays on HTTP/1.1 and `WIGGLE_HTTP_VERSION=HTTP_2` is an option. A plaintext upgrade to h2c
+  keeps its request; Tomcat refused one over 4 KB until the API connector's `maxSavePostSize` was
+  raised to the API's 4 MiB limit.
+
+| Measure | Baseline (#320) | Boot | Boot, tuned |
+|---|---|---|---|
+| Start until `/v1/HealthCheck` answers, H2 in memory | 523–814 ms | 1,584–1,653 ms | 858–876 ms with the CDS archive |
+| The same on PostgreSQL 16 | 843–868 ms | 1,682–1,738 ms | |
+| The image, process start to ready | | 1.7 s | 0.82–0.97 s |
+| Test suite, `./gradlew test --rerun` | 111 s | 145 s | 145 s |
+
+The image's class-data-sharing archive is made in a stage of its own on the runtime image, since an
+archive only loads on the JVM that wrote it; it adds 46 MB. The suite's time is nearly all the start-up
+of its nodes, and the Boot settings tried (lazy initialisation, no JMX or endpoints, no metrics) save
+under 10 ms a node; sharing a node across a class's tests is what would reduce it.
 

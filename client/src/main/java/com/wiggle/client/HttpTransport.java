@@ -33,7 +33,7 @@ final class HttpTransport implements AutoCloseable {
     HttpTransport(String target, Tls.Options tls, boolean requireTls, String apiKey) {
         boolean secure = requireTls || tls.any();
         HttpClient.Builder b = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
+                .version(version())
                 .connectTimeout(CONNECT_TIMEOUT)
                 .executor(Runnable::run);
         if (secure) b.sslContext(Tls.sslContext(tls));   // no truststore: the JVM default trust
@@ -41,6 +41,18 @@ final class HttpTransport implements AutoCloseable {
         for (int i = 0; i < clients.length; i++) clients[i] = b.build();
         this.base = (secure ? "https://" : "http://") + stripScheme(target);
         this.authorization = apiKey == null || apiKey.isBlank() ? null : "Bearer " + apiKey.trim();
+    }
+
+    /** {@code -Dwiggle.http.version}, else {@code WIGGLE_HTTP_VERSION}: {@code HTTP_1_1} or {@code HTTP_2}; HTTP/1.1 by default. */
+    static HttpClient.Version version() {
+        String v = System.getProperty("wiggle.http.version");
+        if (v == null || v.isBlank()) v = System.getenv("WIGGLE_HTTP_VERSION");
+        if (v == null || v.isBlank()) return HttpClient.Version.HTTP_1_1;
+        try {
+            return HttpClient.Version.valueOf(v.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("WIGGLE_HTTP_VERSION='" + v + "' is not HTTP_1_1 or HTTP_2");
+        }
     }
 
     /** {@code -Dwiggle.http.clients}, else {@code WIGGLE_HTTP_CLIENTS}; by default half the processors, at least 2. */

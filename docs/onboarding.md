@@ -551,6 +551,9 @@ backoff). For exactly-once starts across a retried failover, pass a `correlation
 
 **Client connections.** A `WiggleClient` spreads its calls over several HTTP clients, each with its own
 I/O thread: `-Dwiggle.http.clients` / `WIGGLE_HTTP_CLIENTS` (default half the processors, at least 2).
+It speaks HTTP/1.1; `-Dwiggle.http.version` / `WIGGLE_HTTP_VERSION=HTTP_2` switches it to HTTP/2 (h2 over
+TLS, h2c in plaintext), which the server speaks too. Measured on one machine, HTTP/2 was 3–5% slower
+than HTTP/1.1; it is there for a network path that wants it, such as a proxy that speaks only h2.
 
 ### 6.6 Logging
 

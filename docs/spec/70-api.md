@@ -12,8 +12,10 @@ error mapping.
 
 ## 1. General rules
 
-**WGL-API-001** (MUST) The transport MUST be HTTP/1.1 on one port (default 8080), plaintext unless TLS
-is configured ([WGL-OPS-060](90-ops.md)). Every RPC MUST be a `POST /v1/<Method>` whose body is the
+**WGL-API-001** (MUST) The transport MUST be HTTP/1.1 or HTTP/2 on one port (default 8080): h2 negotiated
+over TLS, h2c by upgrade in plaintext, where the request that asks for the upgrade MAY be as large as any
+other. It is plaintext unless TLS is configured ([WGL-OPS-060](90-ops.md)). The Java client speaks
+HTTP/1.1 unless `WIGGLE_HTTP_VERSION=HTTP_2`. Every RPC MUST be a `POST /v1/<Method>` whose body is the
 request message and whose `200` answer is the response message, both `application/json` objects
 ([§13](#13-messages)); an empty body is an empty message. A request body over 4 MiB MUST be refused
 with `413`.
