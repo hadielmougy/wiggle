@@ -171,7 +171,7 @@ try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new 
 ### 2.2 Standalone server & cluster
 
 ```bash
-./gradlew :dist:run        # single node, in-memory, API on :8080
+./gradlew :boot:bootRun    # single node, H2 in memory, API on :8080
 ```
 
 Or **download the pre-built distribution** from the [GitHub release](https://github.com/hadielmougy/wiggle/releases)
@@ -446,7 +446,7 @@ class per recipe where the other is a topology file plus a handlers file.
 | **Storage** | `jdbc`, `postgres` | One HikariCP-pooled JDBC store behind an explicit `StorageFactory`: PostgreSQL to deploy on, H2 for tests and local runs. No DB configured ⇒ in-memory. |
 | **Client & worker** | `client` | Workflow authoring (`FlowSpec.define`), `@ForFlow` binding, `WiggleClient`, pull-based `Worker`, `WiggleConnection`. |
 | **Portal** | `console` | The web UI (embedded Tomcat) a server serves on `WIGGLE_PORTAL_PORT`, over its own engine. Trace, cancel, signal, schedules, search; accounts and permission-set roles on the auth shard. |
-| **Distribution** | `dist` | The one runnable image: the server with the portal, every storage backend bundled. |
+| **Application** | `boot` | The one runnable: the server as a Spring Boot application, with the portal and Actuator's probes, every storage backend bundled. |
 
 **The mechanics that make it hold together:**
 
@@ -560,7 +560,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_MISSED_HEARTBEATS` | `3` | missed beats before a node is considered dead |
 | `WIGGLE_RETENTION_MILLIS` | `86400000` | how long finished instances are kept |
 | `WIGGLE_NODE_NAME` | hostname | name in cluster membership |
-| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for the **`/healthz`** probe endpoint |
+| `WIGGLE_DASHBOARD_PORT` | `0` (off) | port for Actuator's probes: **`/healthz`**, `/healthz/liveness`, `/healthz/readiness` |
 | `WIGGLE_PORTAL_PORT` | `8070` | port for the web **portal** (below); `0` turns it off |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `false` | development only — honour `register(spec, force)` and replace the graph of an already published version instead of rejecting it |
 | `WIGGLE_MEMORY_SHEDDING_ENABLED` | `false` | memory admission control — under heap pressure, reject a fraction of polls (`WIGGLE_MEMORY_THRESHOLD` `0.90`, `WIGGLE_MEMORY_REJECT_RATIO` `0.10`, `WIGGLE_MEMORY_RETRY_MILLIS` `2000`, `WIGGLE_MEMORY_RETRY_JITTER_MILLIS` `1000`) |
@@ -568,7 +568,7 @@ including programmatic `WorkerOptions`, lives in **[docs/onboarding.md](docs/onb
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | *(unset)* | truststore on a server ⇒ **require client certs (mTLS)** |
 | `WIGGLE_SEARCH_ENABLED` | `false` | **full-text search** over instances on the one database; a topology gets it from a `search` shard (`WIGGLE_SEARCH_RETENTION_MILLIS`, `WIGGLE_SEARCH_WORKFLOWS`) |
 | `WIGGLE_API_AUTH` | `off` | **per-RPC authorization**: `log` reports what would be refused, `enforce` refuses; callers present an API key (`WIGGLE_API_KEY`) or a client certificate |
-| `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | rotating file log (JDK `System.Logger` — zero logging deps) |
+| `WIGGLE_LOG_FILE` / `WIGGLE_LOG_LEVEL` | *(unset)* / `INFO` | also log to a rotating file; the level of Wiggle's own loggers |
 
 ### Portal
 

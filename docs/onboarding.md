@@ -63,11 +63,11 @@ go through the migration runner ([§7.4](#74-schema-migrations)), never by editi
 | `jdbc` | shared dialect-aware, HikariCP-pooled JDBC store | `wiggle-jdbc` |
 | `postgres` | PostgreSQL dialect, plus H2 for tests and local runs (in memory when no URL is set), and the `PostgresStorageFactory` that maps a URL scheme to one of them | `wiggle-postgres` |
 | `election` | leader election by announce-and-heartbeat, used for intra-cluster leadership | *(not published)* |
-| `dist` | runnable standalone server (what the Docker image runs); its `WiggleStorageFactory` is `PostgresStorageFactory` under the published name | *(not published)* |
+| `boot` | the server as a Spring Boot application, with the portal and Actuator's probes (what the Docker image and the release archive run) | *(not published)* |
 | `example` | order-fulfilment demo, standalone worker/submitter, benchmark | *(not published)* |
 | `tests` | conformance scenarios + JUnit wrapper | *(not published)* |
 
-Published under group `sh.wiggle`, version **0.0.10** (the runnable `dist` module is not
+Published under group `sh.wiggle`, version **0.0.10** (the runnable `boot` module is not
 published). The server core is database-agnostic; it builds its store from an injected
 `StorageFactory` and the backend is selected from the URL scheme ([§7.2](#72-storage-backends)).
 
@@ -167,13 +167,13 @@ Run the app with `./gradlew run`. It registers a workflow, starts a worker that 
 submits an instance, and waits for completion. You should see `COMPLETED` and a context containing
 `Greeting[name=Ada, message=Hello, Ada]`. Stop the server with Ctrl-C when finished.
 
-Prefer to run the server from source? `./gradlew :dist:run` starts the same in-memory server; the
+Prefer to run the server from source? `./gradlew :boot:bootRun` starts the same server; the
 Java client still connects to `localhost:8080`.
 
 ### 4.2 Server + workers as separate processes
 
 ```bash
-./gradlew :dist:run                                  # terminal 1
+./gradlew :boot:bootRun                              # terminal 1
 ./gradlew :example:runWorker                            # terminal 2 (WIGGLE_URL=localhost:8080)
 ./gradlew :example:submitOrders -Pcount=20             # terminal 3
 ```
@@ -235,8 +235,9 @@ processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:r
 
 | Task | Runs |
 |---|---|
-| `:dist:run` | standalone server (`com.wiggle.dist.Main`, every backend bundled) |
-| `:dist:installDist` | server distribution (bundles every storage backend) — used by the Docker image |
+| `:boot:bootRun` | the server (`com.wiggle.boot.WiggleApplication`, every backend bundled) |
+| `:boot:bootJar` | the server's jar, `wiggle-server-<version>.jar` — what the Docker image runs |
+| `:boot:bootDistTar` | the release archive, `wiggle-server-<version>.tar` (`bin/wiggle` + the jar) |
 | `:example:run` | `Demo` (embedded end-to-end) |
 | `:example:runWorker` | `WorkerMain` |
 | `:example:submitOrders -Pcount=N` | `SubmitOrders` |
@@ -553,17 +554,16 @@ I/O thread: `-Dwiggle.http.clients` / `WIGGLE_HTTP_CLIENTS` (default half the pr
 
 ### 6.6 Logging
 
-Wiggle logs through the JDK's `System.Logger` (routes to `java.util.logging`), so there's no
-logging dependency. See `docs/` / `deploy/logging.properties` and:
+Wiggle logs through the JDK's `System.Logger`, which the server sends to Spring Boot's logging
+(Logback) on the console:
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `WIGGLE_LOG_FILE` | *(unset)* | set a path to also log to a rotating file (5 × 10 MB) |
-| `WIGGLE_LOG_LEVEL` | `INFO` | file level in `System.Logger` names: `INFO`, `DEBUG`, `WARNING`, `ERROR` |
-| *(JVM flag)* `-Djava.util.logging.config.file=…` | — | full control via a `logging.properties`; overrides the env shortcut |
+| `WIGGLE_LOG_FILE` | *(unset)* | also log to this file, rotated by Boot (10 MB, 7 days) |
+| `WIGGLE_LOG_LEVEL` | `INFO` | the level of Wiggle's own loggers, in `System.Logger` names: `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `OFF` |
+| `logging.*` | — | any of Boot's logging properties, as `-Dlogging.…` or `LOGGING_…`, for anything else |
 
-Level mapping to java.util.logging: `DEBUG→FINE`, `TRACE→FINER`, `INFO→INFO`, `WARNING→WARNING`,
-`ERROR→SEVERE`. INFO is a clean lifecycle narrative (start/stop, membership, leader, registrations,
+INFO is a clean lifecycle narrative (start/stop, membership, leader, registrations,
 failures, purges, lag warnings); DEBUG adds per-token/step/RPC detail.
 
 ### 6.7 Example worker & benchmark variables
@@ -596,7 +596,8 @@ The web UI is the **portal**, served by the server process itself on `WIGGLE_POR
 (default `8070`; `0` turns it off), separate from the API port (the `console` module, embedded Tomcat +
 servlets). It reads and acts through the engine in process, so any node with the portal on
 serves the whole cluster, and nothing it does goes over the API. A node's `WIGGLE_DASHBOARD_PORT`
-(default `0` = off) still serves only the **`/healthz`** probe for liveness/readiness checks.
+(default `0` = off) serves only Actuator's probes: **`/healthz`**, `/healthz/liveness` and
+`/healthz/readiness`.
 
 Several server nodes on one host each need their own `WIGGLE_PORTAL_PORT` (or `0`). To keep heavy
 portal use off the claim path, run a node or two with the portal on and route no
@@ -806,7 +807,7 @@ and the leader moves documents in the background, a batch a minute.
 
 No URL → an H2 database in memory (single node, dev/test). Either way the server builds its store from an injected
 `StorageFactory` — **no `ServiceLoader`**: `PostgresStorageFactory` maps the URL scheme to a backend
-at runtime (the distribution's `WiggleStorageFactory` is that class under the image's own name). Both dialects live in `wiggle-postgres` over one HikariCP-pooled
+at runtime. Both dialects live in `wiggle-postgres` over one HikariCP-pooled
 store (`wiggle-jdbc`): **PostgreSQL** is what you deploy on, and **H2** (in PostgreSQL mode) is for
 tests and local runs — it takes the same schema but has no `SKIP LOCKED`, so it claims tasks by
 compare-and-set rather than in a single statement, and is not a deployment target. So the image

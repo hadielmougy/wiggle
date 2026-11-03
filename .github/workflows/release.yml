@@ -41,8 +41,8 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # The distribution bundles the ops console, whose UI is a ClojureScript (shadow-cljs) app —
-      # Node builds it. Without Node the build still succeeds but ships no dashboard.
+      # The distribution bundles the portal, whose UI is a ClojureScript (shadow-cljs) app — Node
+      # builds it. Without Node the build still succeeds but ships no dashboard.
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
@@ -52,11 +52,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build the distribution
-        run: ./gradlew --no-daemon :dist:distTar :dist:distZip
+        run: ./gradlew --no-daemon :boot:bootDistTar :boot:bootDistZip
 
       # In a fresh checkout only the current version's archives exist, so the globs are unambiguous.
       - name: Checksums
-        working-directory: dist/build/distributions
+        working-directory: boot/build/distributions
         run: sha256sum wiggle-server-*.tar wiggle-server-*.zip > SHA-256SUMS
 
       # Catch the classic mistake: tag bumped but build.gradle.kts version not (or vice versa). The
@@ -65,7 +65,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          if [ ! -f "dist/build/distributions/wiggle-server-${VER}.tar" ]; then
+          if [ ! -f "boot/build/distributions/wiggle-server-${VER}.tar" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match the Gradle project version " \
                  "(no wiggle-server-${VER}.tar was built). Set 'version' in build.gradle.kts to ${VER}."
             exit 1
@@ -79,7 +79,7 @@ jobs:
       # checking it against SHA-256SUMS, then verifying SHA-256SUMS itself against the signature).
       - name: Sign the checksums (keyless)
         if: startsWith(github.ref, 'refs/tags/')
-        working-directory: dist/build/distributions
+        working-directory: boot/build/distributions
         run: |
           cosign sign-blob --yes SHA-256SUMS \
             --output-signature SHA-256SUMS.sig \
@@ -91,9 +91,9 @@ jobs:
         with:
           name: wiggle-distribution
           path: |
-            dist/build/distributions/wiggle-server-*.tar
-            dist/build/distributions/wiggle-server-*.zip
-            dist/build/distributions/SHA-256SUMS*
+            boot/build/distributions/wiggle-server-*.tar
+            boot/build/distributions/wiggle-server-*.zip
+            boot/build/distributions/SHA-256SUMS*
 
       - name: Create the GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -101,11 +101,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ASSETS=(
-            dist/build/distributions/wiggle-server-*.tar
-            dist/build/distributions/wiggle-server-*.zip
-            dist/build/distributions/SHA-256SUMS
-            dist/build/distributions/SHA-256SUMS.sig
-            dist/build/distributions/SHA-256SUMS.pem
+            boot/build/distributions/wiggle-server-*.tar
+            boot/build/distributions/wiggle-server-*.zip
+            boot/build/distributions/SHA-256SUMS
+            boot/build/distributions/SHA-256SUMS.sig
+            boot/build/distributions/SHA-256SUMS.pem
           )
           # Idempotent + race-tolerant: try to create with the assets; if the release already
           # exists (a re-run, or another run created it), upload/overwrite the assets instead.

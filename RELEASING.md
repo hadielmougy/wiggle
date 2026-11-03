@@ -16,7 +16,7 @@ under the group `sh.wiggle`:
 | `bom`        | `wiggle-bom`         | version-alignment platform (`java-platform`)      |
 | `client-all` | `wiggle-client-all`  | shaded client — retry library relocated          |
 
-`example`, `tests`, `dist`, and `console` are not published.
+`example`, `tests`, `boot`, and `console` are not published.
 
 Publishing is wired up with the [Vanniktech Maven Publish plugin](https://vanniktech.github.io/gradle-maven-publish-plugin/),
 which builds sources + javadoc jars, signs every artifact, and uploads a deployment
@@ -114,7 +114,8 @@ Maven, no container registry, just a JRE 21 on the host. This is the lowest-fric
 airgapped / locked-down environments (one HTTPS download, verify, extract, run).
 
 `.github/workflows/release.yml` does this automatically on a `v*` tag push: it builds
-`wiggle-server-<version>.{tar,zip}` (`bin/wiggle` launcher + `lib/`), writes `SHA-256SUMS`,
+`wiggle-server-<version>.{tar,zip}` (`bin/wiggle` launcher + `lib/wiggle-server-<version>.jar`, the
+Spring Boot jar; Boot's `bootDistTar` and `bootDistZip`), writes `SHA-256SUMS`,
 signs the checksums **keyless** (Sigstore/cosign — no stored key; uses the workflow's OIDC token),
 and creates the Release with all of it attached. It first checks whether the Release already exists
 and uploads with `--clobber` if so. The tarball's version comes from the Gradle project version; the workflow

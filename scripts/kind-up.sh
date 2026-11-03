@@ -18,8 +18,8 @@ for tool in kind kubectl docker; do
   command -v "$tool" >/dev/null 2>&1 || { echo "error: '$tool' is not installed or not on PATH" >&2; exit 1; }
 done
 
-echo "==> building the server distribution (./gradlew :server:installDist)"
-./gradlew :server:installDist
+echo "==> building the server (./gradlew :boot:bootJar)"
+./gradlew :boot:bootJar
 
 echo "==> building image $IMAGE"
 docker build -t "$IMAGE" .

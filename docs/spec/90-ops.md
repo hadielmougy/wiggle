@@ -53,7 +53,7 @@ conventions, not the library's.
 | `WIGGLE_EVENTS_RETENTION_MILLIS` | `wiggle.events.retentionMillis` | `604800000` | how long an acknowledged event is kept |
 | `WIGGLE_EVENTS_VISIBILITY_MILLIS` | `wiggle.events.visibilityMillis` | `50` | how long an appended event is held back from the feed |
 | `WIGGLE_ALLOW_GRAPH_REPLACE` | `wiggle.allowGraphReplace` | `false` | development only: honour a forced re-registration |
-| `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | port for the `/healthz` probe on a server node |
+| `WIGGLE_DASHBOARD_PORT` | `wiggle.dashboard.port` | `0` (off) | port for Actuator's probes on a server node: `/healthz`, `/healthz/liveness`, `/healthz/readiness` |
 | `WIGGLE_PORTAL_PORT` | — | `8070` | port the node serves the portal on, `0` for none ([§4](#4-the-portal)) |
 
 ### 1.3 Memory admission control
@@ -72,8 +72,8 @@ conventions, not the library's.
 |---|---|---|---|
 | `WIGGLE_TLS_KEYSTORE` (+`_PASSWORD`) | `wiggle.tls.keystore[.password]` | *(unset)* | keystore ⇒ TLS on; unset ⇒ plaintext |
 | `WIGGLE_TLS_TRUSTSTORE` (+`_PASSWORD`) | `wiggle.tls.truststore[.password]` | *(unset)* | on a server ⇒ require client certificates (mTLS); on a client ⇒ the certs it presents |
-| `WIGGLE_LOG_FILE` | — | *(unset)* | also log to a rotating file (5 × 10 MB) |
-| `WIGGLE_LOG_LEVEL` | — | `INFO` | file level in `System.Logger` names |
+| `WIGGLE_LOG_FILE` | — | *(unset)* | also log to this file, rotated by Boot |
+| `WIGGLE_LOG_LEVEL` | — | `INFO` | the level of Wiggle's own loggers, in `System.Logger` names |
 
 ### 1.5 Coordinator and placement (withdrawn)
 
@@ -285,7 +285,7 @@ available from both Docker Hub and GHCR as the same image.
 
 **WGL-OPS-085** (MUST) The Helm chart MUST deploy a hardened pod — distroless image, non-root, read-only
 root filesystem, all capabilities dropped — that passes a *restricted* PodSecurity namespace unmodified,
-with liveness and readiness probes on `/healthz`, a configurable replica count, storage settings, a
+with liveness and readiness probes on `/healthz/liveness` and `/healthz/readiness`, a configurable replica count, storage settings, a
 secret for credentials, a service, a service account and a pod disruption budget.
 
 **WGL-OPS-086** (MUST) The single-VM deployment MUST bring up server, PostgreSQL and portal on one

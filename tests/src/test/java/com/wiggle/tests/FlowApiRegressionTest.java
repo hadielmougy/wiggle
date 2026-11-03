@@ -9,6 +9,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.RetryPolicy;
+import com.wiggle.postgres.PostgresStorageFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -384,7 +385,7 @@ class FlowApiRegressionTest {
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
         try (com.wiggle.server.WiggleServer server =
-                     new com.wiggle.server.WiggleServer(config, new com.wiggle.dist.WiggleStorageFactory()).start();
+                     new com.wiggle.server.WiggleServer(config, new PostgresStorageFactory()).start();
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));

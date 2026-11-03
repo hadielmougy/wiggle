@@ -10,7 +10,7 @@ Port-forward it to your machine:
     kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wiggle.fullname" . }} {{ .Values.service.apiPort }}:{{ .Values.service.apiPort }}
 Then point a client at localhost:{{ .Values.service.apiPort }}.
 
-Liveness/readiness use the always-open /healthz on port {{ .Values.service.healthPort }}.
+Liveness and readiness use Actuator's /healthz/liveness and /healthz/readiness on port {{ .Values.service.healthPort }}.
 {{- if gt (int .Values.service.portalPort) 0 }}
 
 The portal is on port {{ .Values.service.portalPort }} of every pod:

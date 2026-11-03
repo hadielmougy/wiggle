@@ -207,9 +207,9 @@ cmd_deploy() {
 
     log "building the server ($sha) on $SERVER_VM"
     vm_scp "$tarball" "$SERVER_VM:/tmp/wiggle-src.tgz"
-    vm_ssh "$SERVER_VM" "$build; ./gradlew --no-daemon -q --console=plain -PskipDashboard :dist:installDist;
+    vm_ssh "$SERVER_VM" "$build; ./gradlew --no-daemon -q --console=plain -PskipDashboard :boot:bootJar;
         sudo rm -rf /opt/wiggle/server; sudo mkdir -p /opt/wiggle/server;
-        sudo cp -r dist/build/install/wiggle-server/lib /opt/wiggle/server/; echo $sha | sudo tee /opt/wiggle/server/REVISION >/dev/null"
+        sudo cp boot/build/libs/wiggle-server-*.jar /opt/wiggle/server/wiggle-server.jar; echo $sha | sudo tee /opt/wiggle/server/REVISION >/dev/null"
 
     local vm
     for vm in "$WORKER_VM" "$LOAD_VM"; do
@@ -255,7 +255,7 @@ After=network-online.target
 User=wiggle
 WorkingDirectory=/var/lib/wiggle
 EnvironmentFile=/etc/wiggle/server.env
-ExecStart=/usr/bin/java \$JAVA_OPTS -cp /opt/wiggle/server/lib/* com.wiggle.dist.Main
+ExecStart=/usr/bin/java \$JAVA_OPTS -jar /opt/wiggle/server/wiggle-server.jar
 LimitNOFILE=1048576
 Restart=no
 [Install]

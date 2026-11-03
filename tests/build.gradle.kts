@@ -19,9 +19,6 @@ dependencies {
     // test rather than a copy of it. :example depends only on :client/:server/:jdbc/:postgres,
     // all of which are already here, so this adds no new edge to the graph.
     testImplementation(project(":example"))
-    // The dist module supplies the explicit WiggleStorageFactory used to run a WiggleServer against
-    // a real database in tests (the same one the standalone image uses).
-    testImplementation(project(":dist"))
     testImplementation("org.junit.jupiter:junit-jupiter:${property("junitVersion")}")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }

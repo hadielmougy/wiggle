@@ -29,7 +29,7 @@ here first, and the requirement names the test that holds it.
 
 **In scope.** The durable workflow engine (the `server` module), the authoring and worker library
 (`client`), the wire contract (`core`'s `wire` package), storage
-(`jdbc`, `postgres`), leader election (`election`), the runnable distribution (`dist`), and the
+(`jdbc`, `postgres`), leader election (`election`), the runnable Spring Boot application (`boot`), and the
 portal the server serves (`console`).
 
 **Out of scope.** The Go and Python client libraries (separate repositories; they implement the same
