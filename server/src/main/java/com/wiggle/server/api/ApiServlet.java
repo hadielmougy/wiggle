@@ -28,7 +28,7 @@ public final class ApiServlet extends HttpServlet {
     private static final System.Logger LOG = System.getLogger(ApiServlet.class.getName());
     private static final long serialVersionUID = 1L;
     /** The largest request body served. */
-    static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
+    public static final int MAX_BODY_BYTES = 4 * 1024 * 1024;
 
     private final transient ControlPlaneApi api;
     private final transient Authorizer authz;

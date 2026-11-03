@@ -59,13 +59,17 @@ class NodeConfiguration {
 
     /**
      * The web server listens on {@code WIGGLE_PORT}, over TLS when {@code WIGGLE_TLS_KEYSTORE} is set, and
-     * speaks HTTP/2 as well as HTTP/1.1: h2 over TLS, h2c in plaintext.
+     * speaks HTTP/2 as well as HTTP/1.1: h2 over TLS, h2c in plaintext. A plaintext upgrade to h2c keeps
+     * the request that asks for it, so that request may be as large as any other.
      */
     @Bean
     WebServerFactoryCustomizer<TomcatServletWebServerFactory> apiPort(ServerConfig config) {
         return factory -> {
             factory.setPort(config.port());
-            factory.addConnectorCustomizers(connector -> connector.addUpgradeProtocol(new Http2Protocol()));
+            factory.addConnectorCustomizers(connector -> {
+                connector.addUpgradeProtocol(new Http2Protocol());
+                connector.setMaxSavePostSize(ApiServlet.MAX_BODY_BYTES);
+            });
             if (config.tls().hasKeyStore()) {
                 factory.addConnectorCustomizers(connector -> TomcatTls.configure(connector, config.tls()));
             } else {
