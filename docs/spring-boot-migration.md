@@ -46,7 +46,10 @@ still behaves the same.
    `TestPorts`, fast timings, the process's own `WIGGLE_*` variables hidden), the `portal`, `probe` and
    `postgres` profiles, and `WiggleTestNodes` for several nodes on one database. The pilot converted
    `HttpApiTest` and `CompetingConsumersTest` and added `ClusterNodesTest`; see the pilot below.
-4. Tests converted in batches.
+4. Tests converted in batches: every test that started a node now runs on a node of the Boot application
+   (`@WiggleBootTest`, `WiggleTestNodes`, or `WiggleTestServer` on the test's own `ServerConfig`), except
+   the four that test what phase 5 retires: `TlsTest`, `HealthzTest` and `ServerRoleTest` on a node's own
+   servers, `PortalTest` on `Portal.fromEnvironment`. See the results below.
 5. Packaging: the image runs the Boot jar; `dist` and `HealthServer` are retired.
 6. Measure against the baselines below and tune; HTTP/2 between client and server.
 
@@ -102,4 +105,18 @@ What the pilot found:
 Recommended for phase 4: not every test runs in a Spring context. The 57 that start a node move to
 `@WiggleBootTest` or `WiggleTestNodes`, each test on queues of its own. Tests of a store or an engine
 stay plain JUnit on `PostgresStorageFactory.inMemory()`; a context would add a node they never call.
+
+## Phase 4 results
+
+| Measure | Result |
+|---|---|
+| Classes moved to the Boot application | 55 (23 + 27 in `tests`, 3 in `console`, 2 in the pilot), plus `ClusterNodesTest` |
+| Test suite, `./gradlew test --rerun`, 2 runs | 145 s, against 112 s before |
+| The same on live PostgreSQL 16 | 165 s, against 131 s |
+| Starting a node, warm | about 85 ms as a Boot application, 15 ms as a `WiggleServer` |
+| The same with Actuator's metrics, observations and JMX off | about 70 ms |
+
+The suite starts about 350 nodes, and nearly all the added time is their start-up. Each converted test
+still has a node of its own, as it had a server of its own. Sharing one node across a class's tests
+would save most of it, test by test, once each test is on queues of its own.
 

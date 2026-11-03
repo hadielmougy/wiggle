@@ -1,14 +1,13 @@
 package com.wiggle.console;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.core.Tls;
 import com.wiggle.core.criteria.AttrType;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,7 +57,7 @@ class ConsoleWebTest {
 
     @Test @DisplayName("unauthenticated: the SPA API serves instances, detail, cancel, cluster, workflows")
     void apiUnauthenticated() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             c.register(wf());
@@ -98,7 +97,7 @@ class ConsoleWebTest {
 
     @Test @DisplayName("search: /api/instances by exact id, and by correlation (business) key")
     void searchByIdAndCorrelation() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             c.register(wf());
@@ -131,7 +130,7 @@ class ConsoleWebTest {
 
     @Test @DisplayName("backlog: /api/backlog reports work no worker can claim, and says so in the summary")
     void backlogCoverageOverHttp() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             // no worker is ever started here, so this token is dispatchable and unclaimable -- which is
@@ -177,7 +176,7 @@ class ConsoleWebTest {
 
     @Test @DisplayName("authorization: a read-only viewer can read but is 403'd on mutating calls")
     void viewerIsReadOnly() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             c.register(wf());
@@ -215,7 +214,7 @@ class ConsoleWebTest {
 
     @Test @DisplayName("with a password: API needs auth, pages redirect to /login, /healthz stays open")
     void authEnforced() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             conn.client().register(wf());
             ConsoleAuth auth = new ConsoleAuth("admin", "s3cret", false);
@@ -236,7 +235,7 @@ class ConsoleWebTest {
 
     @Test @DisplayName("performance: /api/stats ranks steps by p95")
     void statsOverHttp() throws Exception {
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config());
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             ConsoleDataTest.runTimed(conn.client(), 2);
 
@@ -265,7 +264,7 @@ class ConsoleWebTest {
                 .searchAttribute("rush", AttrType.BOOLEAN, "rush")
                 .thenApply(s::work));
         ServerConfig config = config().withSearch(new ServerConfig.Search(true, Duration.ofDays(30), java.util.Set.of()));
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config);
              DirectConnection conn = WiggleConnection.direct(server.baseUrl())) {
             WiggleClient c = conn.client();
             c.register(shipments);
