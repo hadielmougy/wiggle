@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
@@ -9,7 +10,7 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.InstanceView;
 import com.wiggle.core.Json;
 import com.wiggle.core.RetryPolicy;
-import com.wiggle.postgres.PostgresStorageFactory;
+import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -381,11 +382,10 @@ class FlowApiRegressionTest {
     private static InstanceView runToView(FlowSpec spec, Object handlers, Map<String, Object> input)
             throws Exception {
         com.wiggle.server.ServerConfig config = new com.wiggle.server.ServerConfig(
-                0, "node-0", TestStorage.url("flowreg"), TestStorage.user(), TestStorage.password(), 8,
+                TestPorts.free(), "node-0", TestStorage.url("flowreg"), TestStorage.user(), TestStorage.password(), 8,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (com.wiggle.server.WiggleServer server =
-                     new com.wiggle.server.WiggleServer(config, new PostgresStorageFactory()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             Worker w = new Worker(client, "w-" + System.nanoTime(),
                     WorkerOptions.defaults().withConcurrency(4).withLongPollWait(Duration.ofMillis(250)));

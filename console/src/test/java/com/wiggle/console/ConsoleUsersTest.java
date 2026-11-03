@@ -3,7 +3,6 @@ package com.wiggle.console;
 import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleConnection;
-import com.wiggle.core.Tls;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.server.auth.AuthCache;
 import com.wiggle.testfixtures.TestPorts;
@@ -59,8 +58,7 @@ class ConsoleUsersTest {
     private static ConsoleServer portal(WiggleTestServer server, String builtinPassword) {
         AuthCache cache = new AuthCache(server.accounts(), 30_000, System::currentTimeMillis).start(50);
         ConsoleAuth auth = new ConsoleAuth("admin", builtinPassword, "viewer", null, false, server.accounts(), cache);
-        return new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()), auth, TestPorts.free(),
-                Tls.Options.DISABLED).start();
+        return new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()), auth, TestPorts.free()).start();
     }
 
     private static void withPortal(String builtinPassword, Body body) throws Exception {

@@ -8,8 +8,8 @@
 ### Durable workflows. 
 
 **Describe a process as a graph. Wiggle runs it as a durable state machine that survives
-crashes, waits for humans, and retries failures — with a server you can embed, and workers in
-the language you already use.**
+crashes, waits for humans, and retries failures — with a server that runs as one container or a
+cluster, and workers in the language you already use.**
 
 [![Maven Central](https://img.shields.io/maven-central/v/sh.wiggle/wiggle-client?label=maven&color=5b6cff)](https://central.sonatype.com/artifact/sh.wiggle/wiggle-client)
 [![Docker Hub](https://img.shields.io/badge/docker%20hub-hadielmougy%2Fwiggle-2496ed)](https://hub.docker.com/r/hadielmougy/wiggle)
@@ -149,24 +149,19 @@ the [onboarding guide](docs/onboarding.md).
 
 ## 2. Deployment & running options
 
-One codebase, three postures — start embedded, grow into a cluster, **without rewriting your workflows**.
+The server is a Spring Boot application: the Docker image, the release archive, or `./gradlew
+:boot:bootRun` from source. One codebase, two postures — start with one node, grow into a cluster,
+**without rewriting your workflows**.
 
 | Mode | What it is |
 |---|---|
-| **Embedded** | `WiggleServer` inside your JVM, in-memory or DB store |
-| **Standalone server** | one node, HTTP API `:8080`, in-memory or a database |
+| **Single node** | HTTP API `:8080`, an H2 database in memory or PostgreSQL |
 | **Cluster** | several nodes on **one database** — shared queue, leader runs timers/recovery |
 
-### 2.1 Embedded — one JVM, zero infrastructure
+### 2.1 A server for development and tests
 
-The server is a library. No database configured means an H2 database in memory — perfect for tests:
-
-```java
-try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
-     WiggleClient client = new WiggleClient(server.baseUrl())) {
-    // register flow specs, run workers, start instances — all in-process
-}
-```
+No database configured means an H2 database in memory, so a throwaway server is one command —
+the Docker run from section 1, or `./gradlew :boot:bootRun` in this repository.
 
 ### 2.2 Standalone server & cluster
 
@@ -248,14 +243,12 @@ by the handler's own clock and how long it waited to be claimed, slowest first.
 
 ## 3. Example in Java
 
-The fastest end-to-end: an embedded server, one worker, one instance — one JVM.
+The fastest end-to-end: one worker and one instance, against the server from section 1 on `localhost:8080`.
 
 ```java
 import com.wiggle.client.flow.*;
 import com.wiggle.client.worker.*;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
-import com.wiggle.server.*;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -277,9 +270,8 @@ interface GreetSteps { Map<String, Object> sayHello(Map<String, Object> ctx); }
 
 FlowSpec greet = FlowSpec.define("greet", 1, Map.class, GreetSteps.class, (f, s) -> f.thenApply(s::sayHello));
 
-// 3. Embedded server + worker + one instance.
-try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
-     WiggleClient client = new WiggleClient(server.baseUrl())) {
+// 3. A worker + one instance, on the server at localhost:8080.
+try (WiggleClient client = new WiggleClient("localhost:8080")) {
 
     try (Worker worker = new Worker(client, "worker-1")
             .registerHandler(new GreetHandlers())) {
@@ -627,7 +619,6 @@ Suggestions and PRs welcome — open an issue.
 
 ```kotlin
 implementation("sh.wiggle:wiggle-client:0.0.10")     // DSL + worker + client
-implementation("sh.wiggle:wiggle-postgres:0.0.10")   // only to embed the server: storage, server included
 ```
 
 Prefer the **BOM** so every wiggle module stays version-aligned

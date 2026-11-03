@@ -1,5 +1,6 @@
 package com.wiggle.tests;
 
+import com.wiggle.boot.test.WiggleTestServer;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.flow.Wiggle;
 import com.wiggle.client.worker.ForFlow;
@@ -11,7 +12,6 @@ import com.wiggle.client.worker.WorkerOptions;
 import com.wiggle.core.*;
 import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.server.cluster.ClusterManager;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.store.StorageFactory;
@@ -103,7 +103,7 @@ public final class Scenarios {
     }
 
     private interface Body {
-        void run(WiggleServer server, WiggleClient client) throws Exception;
+        void run(WiggleTestServer server, WiggleClient client) throws Exception;
     }
 
     /** The store a scenario's server runs on, per thread so suites can run in parallel. */
@@ -120,7 +120,7 @@ public final class Scenarios {
         ServerConfig config = new ServerConfig(TestPorts.free(), "test-node", null, null, null, 4,
                 Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
                 Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-        try (WiggleServer server = new WiggleServer(config, STORAGE.get()).start();
+        try (WiggleTestServer server = WiggleTestServer.start(config, STORAGE.get());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             body.run(server, client);
         }

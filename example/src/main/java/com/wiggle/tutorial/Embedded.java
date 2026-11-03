@@ -1,25 +1,21 @@
 package com.wiggle.tutorial;
 
+import com.wiggle.boot.WiggleNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.List;
 
 /**
- * Tutorial 1: the server embedded in your own JVM, on your own database. One process, one main
- * method. See {@link Orders} for the flow it runs and why this lives as compiled source.
- *
- * <p>Storage is an explicit factory rather than classpath discovery.
- * {@link PostgresStorageFactory} is the mapping the project ships and it arrives with
- * {@code wiggle-postgres}, so an embedding app needs no more than that -- and {@code StorageFactory}
- * is a functional interface, so one that wants a different mapping passes its own lambda.
+ * Tutorial 1: the server, a worker and a client in one process, on your own database, to try the flow
+ * with one main method. The server is the Boot application, run in this JVM through {@link WiggleNode};
+ * in production it runs on its own, as {@link Standalone} shows. See {@link Orders} for the flow it runs
+ * and why this lives as compiled source.
  */
 public final class Embedded {
 
@@ -29,7 +25,7 @@ public final class Embedded {
                 .withStorage("jdbc:postgresql://localhost:5432/wiggle", "wiggle", "wiggle", 8)
                 .withPort(8080);
 
-        try (WiggleServer server = new WiggleServer(config, new PostgresStorageFactory()).start();
+        try (WiggleNode server = WiggleNode.start(config);
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             FlowSpec orders = Orders.spec();

@@ -11,7 +11,7 @@ import java.util.List;
 
 /**
  * Tutorial 2: the server is its own process against your database; your app is a client and a
- * worker. See {@link Orders} for the flow, and {@link Embedded} for the single-process shape.
+ * worker. See {@link Orders} for the flow, and {@link Embedded} for all of it in one process.
  */
 public final class Standalone {
 

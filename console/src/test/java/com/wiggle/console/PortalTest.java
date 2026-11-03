@@ -1,11 +1,7 @@
 package com.wiggle.console;
 
-import com.wiggle.core.Tls;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.engine.EngineException;
 import com.wiggle.server.store.StorageException;
-import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 import com.wiggle.testfixtures.TestPorts;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,9 +11,6 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.Duration;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -28,47 +21,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The portal is started from the server's environment, on its own port, or not at all. */
 class PortalTest {
 
-    private static ServerConfig config() {
-        return new ServerConfig(TestPorts.free(), "portal-node", null, null, null, 4,
-                Duration.ofMillis(100), Duration.ofMillis(500), 3, Duration.ofSeconds(20),
-                Duration.ofMillis(500), Duration.ofHours(1), 100, 0);
-    }
-
     @Test @DisplayName("the portal is on by default, on 8070; WIGGLE_PORTAL_PORT=0 turns it off")
-    void onByDefault() throws Exception {
+    void onByDefault() {
         assertEquals(8070, Portal.port(Map.of()));
         assertEquals(9000, Portal.port(Map.of(Portal.PORT_ENV, "9000")));
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start()) {
-            assertTrue(Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(Portal.PORT_ENV, "0")).isEmpty());
-            assertThrows(IllegalArgumentException.class,
-                    () -> Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(Portal.PORT_ENV, "web")));
-        }
-    }
-
-    @Test @DisplayName("a set port serves the portal from the server, separate from the API port, behind its login")
-    void servesFromTheServer() throws Exception {
-        Path users = Files.createTempFile("portal-users", ".json");
-        Files.delete(users);
-        int port;
-        try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
-            port = s.getLocalPort();
-        }
-        try (WiggleServer server = new WiggleServer(config(), new PostgresStorageFactory()).start();
-             Portal portal = Portal.fromEnvironment(server, Tls.Options.DISABLED, Map.of(
-                     Portal.PORT_ENV, String.valueOf(port),
-                     "WIGGLE_DASHBOARD_PASSWORD", "s3cret",
-                     "WIGGLE_CONSOLE_USERS_FILE", users.toString())).orElseThrow()) {
-            assertEquals(port, portal.port());
-            assertTrue(port != server.port(), "the portal is not on the API port");
-            HttpClient http = HttpClient.newHttpClient();
-            String base = "http://localhost:" + port;
-            assertEquals(200, http.send(HttpRequest.newBuilder(URI.create(base + "/healthz")).build(),
-                    HttpResponse.BodyHandlers.ofString()).statusCode());
-            assertEquals(401, http.send(HttpRequest.newBuilder(URI.create(base + "/api/cluster")).build(),
-                    HttpResponse.BodyHandlers.ofString()).statusCode(), "a password set means a login is required");
-        } finally {
-            Files.deleteIfExists(users);
-        }
+        assertEquals(0, Portal.port(Map.of(Portal.PORT_ENV, "0")));
+        assertThrows(IllegalArgumentException.class, () -> Portal.port(Map.of(Portal.PORT_ENV, "web")));
     }
 
     /** A backend whose every call throws {@code failure}. */
@@ -78,8 +36,7 @@ class PortalTest {
     }
 
     private static HttpResponse<String> cluster(DashboardData data) throws Exception {
-        try (ConsoleServer http = new ConsoleServer(data, new ConsoleAuth("admin", null, false), TestPorts.free(),
-                Tls.Options.DISABLED).start()) {
+        try (ConsoleServer http = new ConsoleServer(data, new ConsoleAuth("admin", null, false), TestPorts.free()).start()) {
             return HttpClient.newHttpClient().send(HttpRequest.newBuilder(
                     URI.create("http://localhost:" + http.port() + "/api/cluster")).build(),
                     HttpResponse.BodyHandlers.ofString());

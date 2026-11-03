@@ -16,12 +16,9 @@ import com.wiggle.server.cluster.ReplicaMonitor;
 import com.wiggle.server.engine.DefinitionRegistry;
 import com.wiggle.server.engine.InstanceIds;
 import com.wiggle.server.engine.WorkflowEngine;
-import com.wiggle.server.api.HttpApi;
-import com.wiggle.server.http.HealthServer;
 import com.wiggle.server.store.Storage;
 import com.wiggle.server.topology.Placement;
 
-import java.io.IOException;
 import java.util.List;
 
 /**
@@ -37,16 +34,11 @@ final class ServerBundle {
     private final Housekeeper housekeeper;
     private final ReplicaMonitor replicaMonitor;
     private final ApiServlet apiServlet;
-    /** The node's own API server; null when a servlet container serves {@link #apiServlet}. */
-    private final HttpApi api;
     private final Search search;
     private final SearchIndexer indexer;
     private final long upkeepMillis;
-    /** A {@code /healthz} probe endpoint for Kubernetes, on the configured port; null if none, or a container serves it. */
-    private final HealthServer health;
 
-    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache, boolean servesHttp)
-            throws IOException {
+    ServerBundle(ServerConfig config, Storage storage, ClusterManager cluster, AuthCache authCache) {
         super();
         this.engine = new WorkflowEngine(storage, new DefinitionRegistry(storage), config.defaultLease().toMillis(),
                 config.topology() == null ? InstanceIds.across(storage.instanceShards())
@@ -70,9 +62,6 @@ final class ServerBundle {
         MemoryGuard memory = new MemoryGuard(config.memory());
         this.apiServlet = new ApiServlet(new ControlPlaneApi(engine, cluster, config.maxLongPoll().toMillis(), memory,
                 authz, search), authz, memory);
-        this.api = servesHttp ? new HttpApi(config.port(), config.tls(), apiServlet) : null;
-        // The dashboard moved to the console; the former dashboard port now serves only /healthz.
-        this.health = !servesHttp || config.dashboardPort() <= 0 ? null : new HealthServer(config.dashboardPort());
     }
 
     /** The search shards: the topology's, or the one database's when search is enabled on it. */
@@ -96,20 +85,14 @@ final class ServerBundle {
         if (indexer != null) indexer.start(250, upkeepMillis);
         housekeeper.start();
         replicaMonitor.start();
-        if (api != null) api.start();
-        if (health != null) health.start();
+
     }
 
     public void close() {
-        if (health != null) health.close();
-        if (api != null) api.close();
         if (indexer != null) indexer.close();
         housekeeper.close();
         replicaMonitor.close();
     }
-
-    /** The port the node's own API server listens on; -1 when it has none. */
-    public int port() { return api == null ? -1 : api.port(); }
 
     public ApiServlet apiServlet() { return apiServlet; }
 

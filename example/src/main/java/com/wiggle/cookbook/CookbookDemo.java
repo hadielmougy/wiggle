@@ -1,12 +1,11 @@
 package com.wiggle.cookbook;
 
+import com.wiggle.boot.WiggleNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
 import java.util.List;
@@ -43,7 +42,7 @@ public final class CookbookDemo {
         // that instance starts.
         FlowSpec linearGateSpec = linearGate.spec();
 
-        try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
+        try (WiggleNode server = WiggleNode.start(ServerConfig.fromEnvironment());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
 
             // The author publishes every topology; each recipe object then only implements its steps.

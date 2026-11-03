@@ -267,12 +267,12 @@ serialised bytes held by in-flight request/response cycles.
 
 ## 7. Deployment postures
 
-**WGL-OPS-080** (MUST) The same workflows MUST run unchanged in all three postures: **embedded**
-(`WiggleServer` in the application's JVM, in-memory or on a database), **standalone** (one node serving
-the HTTP API), and **cluster** (several nodes on one database).
+**WGL-OPS-080** (MUST) The same workflows MUST run unchanged in both postures: **single node** (one node
+serving the HTTP API) and **cluster** (several nodes on one database). The server MUST run as its own
+process, the Spring Boot application; embedding it in an application's JVM is not supported.
 
-**WGL-OPS-081** (MUST) An embedded server MUST need nothing but a config and a storage factory, and with
-no database configured MUST keep state in memory — the test posture.
+**WGL-OPS-081** (MUST) With no database configured, a node MUST keep state in an H2 database in memory —
+the posture for development and tests.
 
 **WGL-OPS-082** (MUST) One container image MUST run the server, with the portal behind
 `WIGGLE_PORTAL_PORT`, and MUST bundle every storage backend.
@@ -299,7 +299,7 @@ tunnel rather than exposed.
 dependencies version-aligned, and a **shaded** client (`wiggle-client-all`) with its retry library
 relocated so it has zero transitive dependencies.
 
-*Verified by:* `tests/ServerRoleTest`, `dist/RoleTest`, `scripts/regression-released-image.sh`,
+*Verified by:* `boot/WiggleApplicationTest`, `boot/RoleTest`, `scripts/regression-released-image.sh`,
 `scripts/kind-up.sh`.
 
 ## 8. Performance envelope
@@ -307,7 +307,7 @@ relocated so it has zero transitive dependencies.
 Not requirements — the measured shape of the system, so a deployment knows what to expect. Reproduce
 with the tools in `example`.
 
-**WGL-OPS-090** (SHOULD) Single-JVM engine throughput (embedded server, H2 in memory, 20-step
+**WGL-OPS-090** (SHOULD) Single-JVM engine throughput (the server and its workers in one JVM, H2 in memory, 20-step
 workflow, 4 workers): `SERVER` ≈ 490 instances/s (9.8k step completions/s); `LOCAL_SYNC` ≈ 810
 instances/s (16.2k steps/s); `LOCAL_ASYNC` ≈ 2,630 instances/s (52.6k steps/s).
 

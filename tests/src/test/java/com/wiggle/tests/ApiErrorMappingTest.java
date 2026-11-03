@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The error contract over the wire: engine exceptions must surface to a real client with
  * the right status (404 not-found, 409 conflict, 400 bad request), not as opaque internals.
- * This exercises {@code HttpApi}'s status mapping and the client's reverse mapping together.
+ * This exercises {@code ApiServlet}'s status mapping and the client's reverse mapping together.
  */
 @WiggleBootTest
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)

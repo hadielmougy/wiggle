@@ -1,11 +1,8 @@
 dependencies {
     api(project(":election"))
     api(project(":core"))
-    // the API's HTTP server
-    implementation("org.apache.tomcat.embed:tomcat-embed-core:${property("tomcatVersion")}")
+    // ApiServlet; the application's Tomcat supplies the servlet API at runtime
+    compileOnly("jakarta.servlet:jakarta.servlet-api:${property("servletApiVersion")}")
     // No storage dependency: the server core is storage-agnostic and builds its store from an
-    // injected StorageFactory. The runnable, all-backends server lives in the :dist module.
+    // injected StorageFactory. The runnable server is the :boot module.
 }
-
-// The dashboard SPA moved to the :console module (the server no longer serves a web UI, only a
-// /healthz probe), so the ClojureScript compile now lives in console/build.gradle.kts.

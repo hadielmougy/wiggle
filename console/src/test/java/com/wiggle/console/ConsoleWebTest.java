@@ -5,7 +5,6 @@ import com.wiggle.client.DirectConnection;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.WiggleConnection;
 import com.wiggle.client.flow.FlowSpec;
-import com.wiggle.core.Tls;
 import com.wiggle.core.criteria.AttrType;
 import com.wiggle.server.ServerConfig;
 import com.wiggle.testfixtures.TestPorts;
@@ -66,7 +65,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);   // no password -> open
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -107,7 +106,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -142,7 +141,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -184,7 +183,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", "op-pass", "viewer", "view-pass", false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
                 String cancel = base + "/api/instances/" + id + "/cancel";
@@ -219,7 +218,7 @@ class ConsoleWebTest {
             conn.client().register(wf());
             ConsoleAuth auth = new ConsoleAuth("admin", "s3cret", false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
 
@@ -241,7 +240,7 @@ class ConsoleWebTest {
 
             ConsoleAuth auth = new ConsoleAuth("admin", null, false);
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster()),
-                    auth, TestPorts.free(), Tls.Options.DISABLED).start()) {
+                    auth, TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 
@@ -272,8 +271,7 @@ class ConsoleWebTest {
             c.start("shipments", Map.of("region", "us", "total", 80, "rush", false), null, null);
 
             try (ConsoleServer console = new ConsoleServer(new EngineDashboardData(server.engine(), server.cluster(),
-                    server.search().orElseThrow()), new ConsoleAuth("admin", null, false), TestPorts.free(),
-                    Tls.Options.DISABLED).start()) {
+                    server.search().orElseThrow()), new ConsoleAuth("admin", null, false), TestPorts.free()).start()) {
                 String base = "http://localhost:" + console.port();
                 HttpClient http = HttpClient.newHttpClient();
 

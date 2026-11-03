@@ -4,9 +4,10 @@ plugins {
 
 dependencies {
     implementation(project(":client"))
-    // Only the single-JVM Demo needs the server on its classpath.
+    // The demos and the benchmark run a node of the Boot application in their own JVM (WiggleNode).
+    implementation(project(":boot"))
     implementation(project(":server"))
-    implementation(project(":console"))   // the portal the dashboard seed serves
+    implementation(project(":console"))
     // So the benchmark can run against a real database (WIGGLE_JDBC_URL) to show LOCAL_ASYNC's
     // commit-batching win. Storage is an explicit StorageFactory (no ServiceLoader), so Benchmark
     // wires JdbcStorage + a dialect itself -- these must be on the compile classpath.

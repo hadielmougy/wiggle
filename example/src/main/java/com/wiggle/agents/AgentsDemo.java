@@ -1,12 +1,11 @@
 package com.wiggle.agents;
 
+import com.wiggle.boot.WiggleNode;
 import com.wiggle.client.WiggleClient;
 import com.wiggle.client.flow.FlowSpec;
 import com.wiggle.client.worker.Worker;
 import com.wiggle.core.InstanceView;
-import com.wiggle.postgres.PostgresStorageFactory;
 import com.wiggle.server.ServerConfig;
-import com.wiggle.server.WiggleServer;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -30,7 +29,7 @@ public final class AgentsDemo {
     /** Runs one brief on {@code topic} with {@code model} behind every agent, and prints it. */
     public static void run(Model model, String topic) throws Exception {
         FlowSpec spec = ResearchTeam.spec(Duration.ofMinutes(10));
-        try (WiggleServer server = new WiggleServer(ServerConfig.fromEnvironment(), new PostgresStorageFactory()).start();
+        try (WiggleNode server = WiggleNode.start(ServerConfig.fromEnvironment());
              WiggleClient client = new WiggleClient(server.baseUrl())) {
             client.register(spec);
             try (Worker worker = new Worker(client, "agents-worker")

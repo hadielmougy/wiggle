@@ -22,7 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * The control-plane API, independent of its transport: one handler per method of
  * {@link ControlPlane}. Workers pull work from here; nothing is ever pushed to them, so workers need
  * no inbound connectivity and can scale independently of the servers. A handler reports a refusal or
- * a failure by throwing; {@link HttpApi} maps what it throws to a status.
+ * a failure by throwing; {@link ApiServlet} maps what it throws to a status.
  */
 public final class ControlPlaneApi {
 

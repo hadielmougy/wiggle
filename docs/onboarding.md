@@ -238,7 +238,7 @@ processes against `:8080` (your app on `wiggle-client`, or `./gradlew :example:r
 | `:boot:bootRun` | the server (`com.wiggle.boot.WiggleApplication`, every backend bundled) |
 | `:boot:bootJar` | the server's jar, `wiggle-server-<version>.jar` — what the Docker image runs |
 | `:boot:bootDistTar` | the release archive, `wiggle-server-<version>.tar` (`bin/wiggle` + the jar) |
-| `:example:run` | `Demo` (embedded end-to-end) |
+| `:example:run` | `Demo` (end to end, the server in the same JVM) |
 | `:example:runWorker` | `WorkerMain` |
 | `:example:submitOrders -Pcount=N` | `SubmitOrders` |
 | `:example:bench` | `Benchmark` (throughput micro-benchmark, [§7.6](#76-benchmarking)) |
@@ -813,11 +813,10 @@ tests and local runs — it takes the same schema but has no `SKIP LOCKED`, so i
 compare-and-set rather than in a single statement, and is not a deployment target. So the image
 serves `jdbc:postgresql:` and `jdbc:h2:`.
 
-Embedding the server in your own JVM? `new WiggleServer(config, new PostgresStorageFactory())` —
-it ships in `wiggle-postgres`, which brings `wiggle-jdbc` and `wiggle-server` with it, so that one
-dependency is the whole requirement. `StorageFactory` is a functional interface, so an application
-that wants a different mapping (a dialect of its own, a wrapper that instruments the store) passes
-its own lambda instead.
+The server runs as its own process, the Spring Boot application in the `boot` module; it is not
+embedded in an application's JVM. The examples and tests in this repository run that application
+in their own JVM through `WiggleNode` (and `WiggleTestServer` / `@WiggleBootTest` in tests), on a
+`ServerConfig` built in code.
 
 **Leader election inside a cluster.** Several nodes over one database elect a single leader — the
 reconcile and housekeeping loops run only there — using an announce-and-heartbeat scheme (the
